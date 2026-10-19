@@ -144,7 +144,7 @@ const setPanePrompt = (page: Page, pane: string, prompt: unknown): Promise<void>
 /** The delayed answers that have come back, and a little longer: what they change in the app has been drawn. */
 const returned = async (page: Page, count: number): Promise<void> => {
   await page.waitForFunction((n) => (window as unknown as { formReturned: number }).formReturned >= n, count, { timeout: 15_000 });
-  await page.waitForTimeout(300); // fixed wait: the page may not change after the answer comes back
+  await page.waitForTimeout(300);
 };
 /** From now on, every card taken out of the dock is counted (window.cardsRemoved). */
 const watchCards = (page: Page): Promise<void> => page.evaluate(() => {
@@ -356,7 +356,7 @@ try {
           const box = page.locator(".composer-text");
           await box.focus();
           await box.press("Enter");
-          await page.waitForTimeout(300); // fixed wait: nothing may happen in this time
+          await page.waitForTimeout(300); // fixed wait: an Enter in an empty box may answer nothing
           assert.equal(await page.locator(".prompt-card").count(), 1, "Enter in an empty box answers nothing");
           assert.equal(await page.locator(".prompt-card-confirm").count(), 0);
           // a typed number picks, and waits for Confirm in the card
@@ -856,7 +856,7 @@ try {
           await page.locator(".prompt-card").getByRole("button", { name: /^1\. In memory/ }).tap();
           await page.locator(".prompt-card").getByText(FORM.question).waitFor({ state: "detached" });
           assert.equal((await answersOf(page)).length, 1, "the tap answered");
-          await page.waitForTimeout(300); // fixed wait: focus must not move in this time
+          await page.waitForTimeout(300); // fixed wait: the answer may not move the focus into the message box
           assert.notEqual(await page.evaluate(() => document.activeElement?.className.split(" ")[0]), "composer-text", "a tap does not move the focus into the message box");
           await setPrompt(page, FORM);
           await page.locator(".prompt-card").getByText(FORM.question).waitFor();
@@ -930,7 +930,7 @@ try {
           await ask();
           await option.tap();
           await gone();
-          await page.waitForTimeout(300); // fixed wait: focus must not move in this time
+          await page.waitForTimeout(300); // fixed wait: the answer may not move the focus into the message box
           assert.notEqual(await active(), "composer-text", "a tap does not move the focus into the message box");
           // a click that names no pointer and had no key (a script, an assistive technology): the
           // coarse pointer decides, and the keyboard is not raised
@@ -938,7 +938,7 @@ try {
           await option.focus();
           await option.evaluate((node: HTMLElement) => node.click());
           await gone();
-          await page.waitForTimeout(300); // fixed wait: focus must not move in this time
+          await page.waitForTimeout(300); // fixed wait: the answer may not move the focus into the message box
           assert.notEqual(await active(), "composer-text", "a click of unknown origin stays out of the message box on a coarse pointer");
           // a finger went down on the option and its click says "mouse", as iOS Safari has done
           // (WebKit bug 282988): the pointerdown is believed, and the keyboard is not raised
@@ -949,7 +949,7 @@ try {
             node.dispatchEvent(new PointerEvent("click", { bubbles: true, pointerType: "mouse", detail: 1 }));
           });
           await gone();
-          await page.waitForTimeout(300); // fixed wait: focus must not move in this time
+          await page.waitForTimeout(300); // fixed wait: the answer may not move the focus into the message box
           assert.notEqual(await active(), "composer-text", "a tap whose click is called a mouse's stays out of the message box");
           assert.equal((await answersOf(page)).length, 8);
           assert.deepEqual(errors, []);

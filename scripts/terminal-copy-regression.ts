@@ -94,13 +94,13 @@ setInterval(() => {}, 1000);
     /** Drags and returns what reached the pane between press and release (hover reports before it are herdr's). */
     const drag = async (from: { x: number; y: number }, to: { x: number; y: number }): Promise<string[]> => {
       await page.mouse.move(from.x, from.y);
-      await page.waitForTimeout(100); // fixed wait: a settle gap between mouse events
+      await page.waitForTimeout(100);
       const before = inputs.length;
       await press();
       await page.mouse.move((from.x + to.x) / 2, (from.y + to.y) / 2, { steps: 4 });
       await page.mouse.move(to.x, to.y, { steps: 4 });
       await page.mouse.up();
-      await page.waitForTimeout(100); // fixed wait: a settle gap between mouse events
+      await page.waitForTimeout(100);
       return inputs.slice(before);
     };
     const clipboard = (page: Page): Promise<string> => page.evaluate(() => navigator.clipboard.readText());
@@ -124,28 +124,28 @@ setInterval(() => {}, 1000);
 
     // Ctrl+C with a selection copies it and does not interrupt the pane
     await page.mouse.dblclick(box.x + 20, box.y + box.height / 2);
-    await page.waitForTimeout(100); // fixed wait: a settle gap between mouse events
+    await page.waitForTimeout(100);
     // releasing the double click already copied: empty the clipboard so only Ctrl+C can fill it
     await page.evaluate(() => navigator.clipboard.writeText(""));
     const beforeCopy = inputs.length;
     await page.keyboard.press("Control+c");
-    await page.waitForTimeout(300); // fixed wait: the clipboard write has no event to wait on
+    await page.waitForTimeout(300);
     assert.equal(await clipboard(page), "DRAGCOPY-first-line", "Ctrl+C must copy the double-clicked word");
     assert.equal(inputs.length, beforeCopy, "Ctrl+C with a selection must not send ^C");
     await page.keyboard.press("Control+c");
-    await page.waitForTimeout(300); // fixed wait: the clipboard write has no event to wait on
+    await page.waitForTimeout(300);
     assert.equal(inputs.at(-1), "\x03", "Ctrl+C without a selection still interrupts");
 
     // a Korean layout: the C key reports "ㅊ", and Ctrl+C with a selection still copies
     await page.mouse.dblclick(box.x + 20, box.y + box.height / 2);
-    await page.waitForTimeout(100); // fixed wait: a settle gap between mouse events
+    await page.waitForTimeout(100);
     await page.evaluate(() => navigator.clipboard.writeText(""));
     const beforeHangul = inputs.length;
     const cdp = await context.newCDPSession(page);
     const hangulC = { key: "ㅊ", code: "KeyC", windowsVirtualKeyCode: 67, modifiers: 2 };
     await cdp.send("Input.dispatchKeyEvent", { type: "rawKeyDown", ...hangulC });
     await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", ...hangulC });
-    await page.waitForTimeout(300); // fixed wait: the clipboard write has no event to wait on
+    await page.waitForTimeout(300);
     assert.equal(await clipboard(page), "DRAGCOPY-first-line", "Ctrl+C on a Korean layout must copy the selection");
     assert.equal(inputs.length, beforeHangul, "Ctrl+C on a Korean layout with a selection must not send ^C");
 
@@ -219,7 +219,7 @@ setInterval(() => {}, 1000);
     const endRow = page.locator(".pane-terminal .xterm-rows > div", { hasText: "-END" });
     const endBox = (await endRow.boundingBox())!;
     await drag({ x: longBox.x + 1, y: longBox.y + longBox.height / 2 }, { x: endBox.x + 600, y: endBox.y + endBox.height / 2 });
-    await page.waitForTimeout(300); // fixed wait: the clipboard write has no event to wait on
+    await page.waitForTimeout(300);
     assert.equal(await clipboard(page), `LONG-${"x".repeat(300)}-END`, "a soft-wrapped line must copy without line breaks");
 
     // plain HTTP (no navigator.clipboard): the copy command takes over
@@ -251,11 +251,11 @@ setInterval(() => {}, 1000);
       assert.match(await plain.evaluate(() => (window as any).copied as string), /^DRAGCOPY-first-line/, "plain HTTP drag must copy");
       await plain.evaluate(() => { (window as any).copied = undefined; });
       await plain.mouse.dblclick(rowBox.x + 20, rowBox.y + rowBox.height / 2);
-      await plain.waitForTimeout(100); // fixed wait: a settle gap between mouse events
+      await plain.waitForTimeout(100);
       await plain.evaluate(() => { (window as any).copied = undefined; });
       const beforeKey = sent.length;
       await plain.keyboard.press("Control+c");
-      await plain.waitForTimeout(300); // fixed wait: the clipboard write has no event to wait on
+      await plain.waitForTimeout(300);
       assert.equal(await plain.evaluate(() => (window as any).copied as string), "DRAGCOPY-first-line", "plain HTTP Ctrl+C must copy");
       assert.equal(sent.length, beforeKey, "plain HTTP Ctrl+C with a selection must not send ^C");
     } finally {
@@ -299,13 +299,13 @@ setInterval(() => {}, 1000);
     await page.mouse.up();
     assert.equal(lines(await filled()).at(-1), 299, "a drag past the bottom edge takes the last line");
     await page.mouse.wheel(0, lineHeight); // drops the highlight
-    await page.waitForTimeout(2600); // fixed wait: the copy note fades before the evidence below
+    await page.waitForTimeout(2600); // the copy note fades before the evidence below
 
     const firstTop = await topRow();
     const pressAt = { x: screen.x + 200, y: screen.y + lineHeight * 5.5 };
     await page.evaluate(() => navigator.clipboard.writeText(""));
     await page.mouse.move(pressAt.x, pressAt.y);
-    await page.waitForTimeout(100); // fixed wait: a settle gap between mouse events
+    await page.waitForTimeout(100);
     const beforeWheel = inputs.length;
     await press();
     await page.mouse.move(screen.x + 1, pressAt.y + lineHeight * 3, { steps: 3 });
@@ -330,7 +330,7 @@ setInterval(() => {}, 1000);
     await page.mouse.move(bottomAt.x, bottomAt.y);
     await press();
     await page.mouse.move(screen.x + 1, screen.y - 20, { steps: 5 });
-    await page.waitForTimeout(600); // fixed wait: a held drag has to pass a time threshold
+    await page.waitForTimeout(600);
     await page.mouse.move(screen.x + 1, screen.y + lineHeight / 2, { steps: 2 });
     await page.mouse.up();
     copied = lines(await filled());
@@ -349,7 +349,7 @@ setInterval(() => {}, 1000);
 
     // the next wheel outside a drag drops the stale highlight
     await page.mouse.wheel(0, lineHeight * 3);
-    await page.waitForTimeout(200); // fixed wait: nothing may happen in this time
+    await page.waitForTimeout(200);
     assert.equal(await page.evaluate(() => document.querySelector(".pane-terminal .xterm-selection div") !== null), false, "a wheel after a copy clears the highlight");
     await herdrRpc("pane.scroll", { pane_id: pane, offset_from_bottom: 0 });
 

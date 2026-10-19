@@ -87,7 +87,7 @@ export async function checkMobileViewport(browser: Browser, origin: string, pane
       document.body.append(next);
       next.focus();
     });
-    await page.waitForTimeout(20); // fixed wait: a frame for the moved focus to settle
+    await page.waitForTimeout(20);
     await shell(true, "500px", 500);
     await blur();
     // Focus loss alone does not dismiss the still-occluding keyboard.
