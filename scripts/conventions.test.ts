@@ -94,6 +94,8 @@ describe("fixed sleeps", () => {
     expect(found("for (let i = 0; i < panes.length; i++) { await Bun.sleep(1000); }")).toBe(1);
     expect(found("for (let attempt = 0; attempt < MAX_TRIES && !seen(); attempt++) await Bun.sleep(50);")).toBe(0);
     expect(found("await new Promise((r) => setTimeout(() => r(), 500));")).toBe(1);
+    expect(found("await page.waitForTimeout(500);")).toBe(1);
+    expect(found("// fixed wait: nothing may arrive in this time\nawait page.waitForTimeout(NO_SEND_WAIT_MS);")).toBe(0);
     expect(found("await new Promise(function (r) { setTimeout(r, 500); });")).toBe(1);
   });
 

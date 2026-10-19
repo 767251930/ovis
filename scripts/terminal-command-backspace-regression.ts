@@ -35,7 +35,7 @@ export async function checkCommandBackspace(browser: Browser, origin: string, pa
     ]) {
       const before = inputs.length;
       await input.press(shortcut!);
-      await page.waitForTimeout(300);
+      await page.waitForTimeout(300); // fixed wait: nothing may happen in this time
       assert.deepEqual(inputs.slice(before).map(({ pane_id, text }) => ({ pane_id, text })),
         [{ pane_id: paneId, text: expected }], `${shortcut} must send its sequence exactly once`);
     }
@@ -54,7 +54,7 @@ export async function checkCommandBackspace(browser: Browser, origin: string, pa
       textarea.dispatchEvent(new KeyboardEvent("keydown", backspace));
       textarea.dispatchEvent(new KeyboardEvent("keyup", backspace));
     });
-    await page.waitForTimeout(300);
+    await page.waitForTimeout(300); // fixed wait: nothing may happen in this time
     assert.deepEqual(inputs.slice(beforeCommit).map(({ pane_id, text }) => ({ pane_id, text })),
       [{ pane_id: paneId, text: "한" }, { pane_id: paneId, text: "\x15" }],
       "pending IME text must precede line deletion without duplicates");
@@ -63,7 +63,7 @@ export async function checkCommandBackspace(browser: Browser, origin: string, pa
       await input.dispatchEvent("keydown", {
         key: "Backspace", code: "Backspace", metaKey: true, ...composition, bubbles: true, cancelable: true,
       });
-      await page.waitForTimeout(300);
+      await page.waitForTimeout(300); // fixed wait: nothing may happen in this time
       assert.equal(inputs.slice(before).some(({ text }) => text === "\x15"), false,
         "an active composition must not receive a line-deletion sequence");
     }
@@ -126,7 +126,7 @@ process.stdin.on("data", (data) => {
     await page.goto(`${origin}/?pane=${encodeURIComponent(paneId)}`);
     await page.locator(".conn-live").waitFor();
     await page.locator(".xterm-helper-textarea").press("Meta+Backspace");
-    await page.waitForTimeout(300);
+    await page.waitForTimeout(300); // fixed wait: nothing may happen in this time
     assert.deepEqual(inputs, ["\x7f"], "non-macOS Meta+Backspace keeps its native sequence");
     console.log("PASS non-macOS Meta+Backspace keeps native DEL");
   } finally {

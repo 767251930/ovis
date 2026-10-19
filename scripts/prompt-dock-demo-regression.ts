@@ -144,7 +144,7 @@ const setPanePrompt = (page: Page, pane: string, prompt: unknown): Promise<void>
 /** The delayed answers that have come back, and a little longer: what they change in the app has been drawn. */
 const returned = async (page: Page, count: number): Promise<void> => {
   await page.waitForFunction((n) => (window as unknown as { formReturned: number }).formReturned >= n, count, { timeout: 15_000 });
-  await page.waitForTimeout(300);
+  await page.waitForTimeout(300); // fixed wait: the page may not change after the answer comes back
 };
 /** From now on, every card taken out of the dock is counted (window.cardsRemoved). */
 const watchCards = (page: Page): Promise<void> => page.evaluate(() => {
@@ -193,13 +193,18 @@ try {
     window.formDelay = 0;
     window.formReturned = 0;
     window.formReadFails = false;
+    window.failedReadsSinceRefusal = 0;
+    window.formReadHold = false;
+    window.formHoldAfterFailure = false;
     const promptOf = (pane) => pane === web ? window.formPrompt : window.panePrompts[pane] ?? null;
     const json = (body, status = 200) => Promise.resolve(new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } }));
     window.fetch = (input, init) => {
       const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url, location.href);
       if (url.pathname === "/api/pane/prompt") {
         // window.formReadFails: reads of the screen fail as a dropped connection does
-        if (window.formReadFails) return Promise.reject(new TypeError("Failed to fetch"));
+        // window.formReadHold: a read that never comes back, until a refused answer ends the hold; formHoldAfterFailure starts it after each failed read
+        if (window.formReadHold) return new Promise(() => {});
+        if (window.formReadFails) { window.failedReadsSinceRefusal += 1; if (window.formHoldAfterFailure) window.formReadHold = true; return Promise.reject(new TypeError("Failed to fetch")); }
         const prompt = promptOf(url.searchParams.get("pane_id"));
         if (prompt !== null) return json({ prompt, suggestion: null });
       }
@@ -207,7 +212,7 @@ try {
         const answer = JSON.parse(init.body);
         const prompt = promptOf(answer.pane_id);
         if (prompt !== null) {
-          if (answer.prompt_id !== prompt.id) return json({ error: { code: "prompt_changed", message: "the screen no longer shows that prompt" } }, 409);
+          if (answer.prompt_id !== prompt.id) { window.failedReadsSinceRefusal = 0; window.formReadHold = false; return json({ error: { code: "prompt_changed", message: "the screen no longer shows that prompt" } }, 409); }
           window.formAnswers.push(answer);
           if (answer.pane_id === web) window.formPrompt = null; else delete window.panePrompts[answer.pane_id];
           // window.formDelay: the answer takes that long to come back, as send_keys and the re-read do
@@ -351,7 +356,7 @@ try {
           const box = page.locator(".composer-text");
           await box.focus();
           await box.press("Enter");
-          await page.waitForTimeout(300);
+          await page.waitForTimeout(300); // fixed wait: nothing may happen in this time
           assert.equal(await page.locator(".prompt-card").count(), 1, "Enter in an empty box answers nothing");
           assert.equal(await page.locator(".prompt-card-confirm").count(), 0);
           // a typed number picks, and waits for Confirm in the card
@@ -658,7 +663,8 @@ try {
           await setPrompt(page, { ...FORM, id: "demo-form-moved" });
           await page.locator(".prompt-card-option-label").first().click();
           await page.locator(".prompt-card").getByText("The question on screen changed; check it and answer again.").waitFor();
-          await page.waitForTimeout(500);
+          // the poll the refusal restarted reads at once: wait for its first failed read (the mock counts them from the refusal)
+          await page.waitForFunction(() => (window as unknown as { failedReadsSinceRefusal: number }).failedReadsSinceRefusal >= 1, undefined, { timeout: 10_000 });
           assert.equal(await status.textContent(), STALE, "a refused answer restarts the reads without clearing the notice");
           await setPrompt(page, FORM);
           await page.evaluate(() => { (window as unknown as { formReadFails: boolean }).formReadFails = false; });
@@ -666,6 +672,25 @@ try {
           assert.deepEqual(errors, []);
         } catch (error) { await preserveFailure(page, error); } finally { await close(); }
         console.log("PASS reads that keep failing mark the card as not updated, and the next read that answers clears it");
+      }
+
+      {
+        // A restarted poll goes on counting the failed reads: one failure, a refused answer, one more failure is two in a row
+        const { page, errors, close } = await open({ width: 1440, height: 900, prompt: FORM });
+        try {
+          const status = page.locator(".prompt-card [role=status]");
+          type Mock = { formReadFails: boolean; formHoldAfterFailure: boolean; failedReadsSinceRefusal: number };
+          // each failed read is followed by reads that hang until a refused answer: the restart's read is the next to fail, and the last
+          await page.evaluate(() => { const mock = window as unknown as Mock; mock.formHoldAfterFailure = true; mock.formReadFails = true; });
+          await page.waitForFunction(() => (window as unknown as Mock).failedReadsSinceRefusal >= 1, undefined, { timeout: 10_000 });
+          assert.equal(await status.textContent(), "", "one failed read says nothing yet");
+          await setPrompt(page, { ...FORM, id: "demo-form-moved" });
+          await page.locator(".prompt-card-option-label").first().click();
+          await page.locator(".prompt-card").getByText("The question on screen changed; check it and answer again.").waitFor();
+          await page.waitForFunction((text) => document.querySelector(".prompt-card [role=status]")?.textContent === text, "Not updated: the question on screen may have changed.", { timeout: 10_000 });
+          assert.deepEqual(errors, []);
+        } catch (error) { await preserveFailure(page, error); } finally { await close(); }
+        console.log("PASS a restarted poll counts the failed reads before it");
       }
 
       for (const size of [{ width: 1440, height: 900 }, { width: 390, height: 700, touch: true }]) {
@@ -831,7 +856,7 @@ try {
           await page.locator(".prompt-card").getByRole("button", { name: /^1\. In memory/ }).tap();
           await page.locator(".prompt-card").getByText(FORM.question).waitFor({ state: "detached" });
           assert.equal((await answersOf(page)).length, 1, "the tap answered");
-          await page.waitForTimeout(300);
+          await page.waitForTimeout(300); // fixed wait: focus must not move in this time
           assert.notEqual(await page.evaluate(() => document.activeElement?.className.split(" ")[0]), "composer-text", "a tap does not move the focus into the message box");
           await setPrompt(page, FORM);
           await page.locator(".prompt-card").getByText(FORM.question).waitFor();
@@ -905,7 +930,7 @@ try {
           await ask();
           await option.tap();
           await gone();
-          await page.waitForTimeout(300);
+          await page.waitForTimeout(300); // fixed wait: focus must not move in this time
           assert.notEqual(await active(), "composer-text", "a tap does not move the focus into the message box");
           // a click that names no pointer and had no key (a script, an assistive technology): the
           // coarse pointer decides, and the keyboard is not raised
@@ -913,7 +938,7 @@ try {
           await option.focus();
           await option.evaluate((node: HTMLElement) => node.click());
           await gone();
-          await page.waitForTimeout(300);
+          await page.waitForTimeout(300); // fixed wait: focus must not move in this time
           assert.notEqual(await active(), "composer-text", "a click of unknown origin stays out of the message box on a coarse pointer");
           // a finger went down on the option and its click says "mouse", as iOS Safari has done
           // (WebKit bug 282988): the pointerdown is believed, and the keyboard is not raised
@@ -924,7 +949,7 @@ try {
             node.dispatchEvent(new PointerEvent("click", { bubbles: true, pointerType: "mouse", detail: 1 }));
           });
           await gone();
-          await page.waitForTimeout(300);
+          await page.waitForTimeout(300); // fixed wait: focus must not move in this time
           assert.notEqual(await active(), "composer-text", "a tap whose click is called a mouse's stays out of the message box");
           assert.equal((await answersOf(page)).length, 8);
           assert.deepEqual(errors, []);

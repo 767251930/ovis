@@ -1182,20 +1182,20 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
   // Prompts belong to the visible screen, not the native transcript: a Codex directory-trust
   // menu can appear while idle without any file mutation. Keep their independent 2s poll.
   const [promptStale, setPromptStale] = useState(false);
+  const failedPromptReads = useRef(0);
   const pollPrompt = connected && !ended && agent !== null;
   useEffect(() => {
-    if (!pollPrompt) { setPrompt(null); setPromptStale(false); setRestored(null); onSuggestionRef.current?.(paneId, null); onRestoredRef.current?.(paneId, null); return; }
+    if (!pollPrompt) { setPrompt(null); setPromptStale(false); failedPromptReads.current = 0; setRestored(null); onSuggestionRef.current?.(paneId, null); onRestoredRef.current?.(paneId, null); return; }
     if (!visible) return;
     let cancelled = false;
     let timer = 0;
-    // a restart (the page shown again, a refused answer) keeps the notice: only a read that answers clears it
-    let failedReads = 0;
+    // a restart (the page shown again, a refused answer) keeps the notice and the count of failed reads: only a read that answers clears them
     const readPrompt = async (): Promise<void> => {
       // the same prompt keeps its object: the composer and the card only change with it
       const sent = sentKeyRef.current;
       try {
         const next = await fetchPanePromptState(paneId);
-        failedReads = 0;
+        failedPromptReads.current = 0;
         if (!cancelled) {
           setPromptStale(false);
           setPrompt((current) => current?.id === next.prompt?.id ? current : next.prompt);
@@ -1209,7 +1209,7 @@ export const ChatView = memo(function ChatView({ paneId, active = true, visible:
       // a read that failed (a network error, a server hiccup) says nothing about the screen: the card,
       // the suggestion and the restored send stay as they are until the next read answers. Reads that
       // keep failing let the card say so (#1335): answering stays safe, the server re-reads first
-      catch { failedReads += 1; if (!cancelled && failedReads >= PROMPT_STALE_READS) setPromptStale(true); }
+      catch { failedPromptReads.current += 1; if (!cancelled && failedPromptReads.current >= PROMPT_STALE_READS) setPromptStale(true); }
       finally { if (!cancelled) timer = window.setTimeout(() => void readPrompt(), PROMPT_POLL_MS); }
     };
     void readPrompt();

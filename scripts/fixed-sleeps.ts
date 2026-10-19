@@ -20,8 +20,8 @@
  */
 import { files, lineOf, read, stripComments } from "./source-scan.ts";
 
-/** Bun.sleep, or a Promise resolved by setTimeout (`r => setTimeout(r, n)`, `function (r) { setTimeout(() => r(), n) }`), not a 0 ms yield. */
-const SLEEP = /\bBun\.sleep(?:Sync)?\s*\(|\bnew Promise(?:<[^>]*>)?\(\s*(?:async\s*)?(?:function\s*)?\(?\s*(\w+)\s*\)?\s*(?:=>)?\s*\{?\s*(?:window\.|globalThis\.)?setTimeout\(\s*(?:\1|\(\s*\)\s*=>\s*\{?\s*\1\s*\(\s*\)\s*;?\s*\}?)\s*,(?!\s*0\s*\))/g;
+/** Bun.sleep, Playwright's `page.waitForTimeout`, or a Promise resolved by setTimeout (`r => setTimeout(r, n)`, `function (r) { setTimeout(() => r(), n) }`), not a 0 ms yield. */
+const SLEEP = /\bBun\.sleep(?:Sync)?\s*\(|\.waitForTimeout\s*\(|\bnew Promise(?:<[^>]*>)?\(\s*(?:async\s*)?(?:function\s*)?\(?\s*(\w+)\s*\)?\s*(?:=>)?\s*\{?\s*(?:window\.|globalThis\.)?setTimeout\(\s*(?:\1|\(\s*\)\s*=>\s*\{?\s*\1\s*\(\s*\)\s*;?\s*\}?)\s*,(?!\s*0\s*\))/g;
 /** A loop head bounded by a clock, a deadline or a try count (`i < 40`, `i < MAX_TRIES`, `attempt <= attempts`); a plain `i < list.length` is not. */
 const BOUND = /Date\.now\(\)|performance\.now\(\)|[Dd]eadline|\b\w+\s*<=?\s*(?:\d|[A-Z][A-Z0-9_]*\b|\w*(?:[Tt]ries|[Aa]ttempts|[Rr]etries|[Mm]ax|[Ll]imit)\w*)/;
 /** `// fixed wait:` followed by the reason. */
