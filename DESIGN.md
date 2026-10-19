@@ -513,12 +513,12 @@ The values are the ones in `src/styles.css`. Every token but `--fs-input` is `ca
   punctuation, never as "시도하 / 세요.". Japanese and Chinese (`html:is(:lang(ja), :lang(zh))`)
   are `line-break: strict`: no line starts with closing punctuation or a small kana (。」ょ).
   English keeps the browser's defaults. Chat prose in another language follows the UI language.
-- `pre`, `code`, `kbd`, `samp`, the terminal (`.xterm`) and the two text boxes (`.composer-text`,
-  `.terminal-input-text`) reset to `word-break: normal; line-break: auto`, and their children
-  inherit that: a path, a command or a terminal cell is not a word. `overflow-wrap` is no part of
-  the rule; the chat's and the composer's own rules keep it. The file viewer's virtualized source
-  rows live in `@pierre/diffs`' shadow root, which document CSS does not reach: they inherit
-  `body`'s value.
+- `pre`, `code`, `kbd`, `samp`, the terminal (`.xterm`) and the text boxes (`.composer-text`,
+  `.composer-measure`, `.terminal-input-text`) reset to `word-break: normal; line-break: auto`, and
+  their children inherit that: a path, a command or a terminal cell is not a word. `overflow-wrap`
+  is no part of the rule; the chat's and the composer's own rules keep it. The file viewer's
+  virtualized source rows live in `@pierre/diffs`' shadow root, which document CSS does not reach:
+  they inherit `body`'s value.
 - `text-wrap: balance` on `.modal-title`, `.composer-greeting-title` and a Settings group's
   caption (`.settings-section h3`): a title that wraps takes even lines, never a full line over a
   one-word stub.
