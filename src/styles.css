@@ -2784,14 +2784,15 @@ button {
 
   .app-header .view-switch > button {
     position: relative;
+    --lens-button-h: 34px;
     min-width: var(--touch-target-header);
-    height: 34px;
+    height: var(--lens-button-h);
   }
 
   .app-header .view-switch > button::before {
     content: "";
     position: absolute;
-    inset: calc((34px - var(--touch-target-header)) / 2) 0;
+    inset: calc((var(--lens-button-h) - var(--touch-target-header)) / 2) 0;
   }
 }
 

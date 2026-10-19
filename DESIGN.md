@@ -1254,8 +1254,9 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   marks the state that needs a look, never "on".
 - The segmented Chat/Terminal view switch lives in the header. There is no floating view-toggle pill.
   Files is an action, not a third lens: it opens the Files dialog and never joins the switch.
-- At `<=768px` the drawer toggle, the lens buttons and More are `--touch-target-header` squares
-  (the switch's track loses its inset so the `--header-h` bar holds them).
+- At `<=768px` the drawer toggle and More are `--touch-target-header` squares. The lens buttons
+  are `--touch-target-header` wide and draw shorter inside a track that keeps its inset, reaching
+  the tap height through an expander, as the segmented control entry describes.
 - Connection is one quiet chip, drawn only while the bridge is not live: a pulsing dot plus the
   written state - connecting until this page's first connection to the PC's socket, reconnecting
   after a drop, disconnected once output stopped. Below `900px` it keeps only its dot; the word stays as
