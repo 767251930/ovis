@@ -46,9 +46,10 @@ const TERMINAL_BOUND = [
 const TERMINAL_FORMS: CommandForm[] = [{ match: "bare", interaction: "terminal" }, { match: "other", interaction: "terminal" }];
 const FORMS: Record<string, CommandForm[]> = {
   ...Object.fromEntries(TERMINAL_BOUND.map((name) => [name, TERMINAL_FORMS])),
-  // A bare /model opens a picker; the /switch reader of #1377 is not registered on this base, so no
-  // dialog is named yet. /model <args> sets the model and is stored as a model change.
-  model: [{ match: "bare", interaction: "unknown" }, { match: "other", interaction: "none" }],
+  // The chat sends a bare /model as /switch (server/core/composer.ts): omp's own /model opens its
+  // Models hub, which saves the default role for later sessions, and /switch its session-only
+  // picker, which the omp-model card answers. /model <args> sets the model and is stored as a model change.
+  model: [{ match: "bare", interaction: "dialog", dialog: "omp-model" }, { match: "other", interaction: "none" }],
   // omp compacts in place since 17.4.0; the form that opens its own dialog arrives with the handoff reader.
   handoff: [{ match: "bare", interaction: "unknown" }],
   btw: [{ match: "bare", interaction: "none" }, { match: "other", interaction: "none" }],

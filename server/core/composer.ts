@@ -303,9 +303,13 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
           await freeHermesInput(paneId, identity ?? undefined);
           inTime();
         }
+        // omp's `/model` opens its Models hub, which assigns roles and saves the default one for
+        // later sessions, while omp itself calls the command "Switch model for this session":
+        // the chat's `/model` opens omp's session-only picker, the one its card answers
+        const sent = (pane?.agent ?? pane?.agent_session?.agent) === "omp" && text.trim() === "/model" ? "/switch" : text;
         try {
-          await agentPrompt(paneId, closeMention(text));
-          noteSubmitted(paneId, text);
+          await agentPrompt(paneId, closeMention(sent));
+          noteSubmitted(paneId, sent);
           return;
         } catch (error) {
           if (!(error instanceof HerdrError)) throw error;
