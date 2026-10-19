@@ -25,6 +25,8 @@ summarized at most once every 30 seconds per RPC method/peer or machine, with su
 bookkeeping retains at most 128 recent keys per logger, including healthy keys so flapping cannot
 reset the throttle. Only a visible failure episode emits a recovery. Abnormal browser WebSocket closes are
 coalesced separately for local and relayed connections; normal closes and server shutdown are quiet.
+`websocket.failed` means any close other than 1000 or 1001, so it also covers closes the server starts
+itself (device revoke 1008, output stall, relay restart 1012); `close_code` tells them apart.
 The close reason, input, credentials, peer names, socket paths and raw exception messages are never
 included. A remote machine's opaque UUID may appear, not its name or SSH address. These records are
 not a per-request HTTP access log and do not add timestamps to older console messages.
