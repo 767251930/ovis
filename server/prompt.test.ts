@@ -4649,6 +4649,18 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
     const rule = "─".repeat(120);
     const omoFooter = `${rule}\n/private/tmp/omo-ask${" ".repeat(74)}[----------] 42K/1M (4.2%)\n${" ".repeat(86)}claude-opus-5-5 · high · OmO 5.1.7\n`;
     const mark = (at: number, row: number, on = "❯") => at === row ? on : " ";
+    /** omp's session-only model picker, a rule between its recent model and the rest, which ↑/↓ step over */
+    const ompPicker = (at: number) => {
+      const box = (text: string) => `│ ${text.padEnd(86)} │`;
+      const row = (index: number, name: string) => box(`${mark(at, index)} ${name}`);
+      return [
+        `\n╭─ Switch Model ${"─".repeat(73)}╮`, box(" Session-only switch — role models stay unchanged"), box(" 🔍 >"), box(""),
+        row(0, "litellm/claude-opus-5-5 ●          1m ◫  $4/20"), box(`  ${"─".repeat(80)}`),
+        row(1, "litellm/gpt-6-sol                1.1m ◫  $2/10"), row(2, "litellm/gpt-5.6-sol              1.1m ◫  $4/20"), box(""),
+        box("  GPT 6 Sol (LiteLLM) · 1.1m ctx · 128k out"), box(""),
+        box("↑/↓ models · ⏎ use for this session · type to search · @ quick roles · ⎋ close"), `╰${"─".repeat(88)}╯\n`,
+      ].join("\n");
+    };
     const cases: { name: string; agent: string; status?: string; rows: number; start?: number; draw: (at: number, ticked: number[]) => string; choice: Parameters<typeof answer>[1]; sent: string[] }[] = [
       {
         name: "omp's permission: Deny", agent: "omp", rows: 2, choice: { option_index: 1 }, sent: ["down", "enter"],
@@ -4697,6 +4709,11 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
       {
         name: "OmO's model list", agent: "omo", status: "idle", rows: 3, choice: { option_index: 2 }, sent: ["down", "down", "enter"],
         draw: (at) => `Only showing models from configured providers. Use /login to add providers.\nenter select  ctrl+s select as default  ctrl+f favorite\n>\n${["claude-opus-4-8 [anthropic] ✓", "claude-fable-5 [anthropic]", "gpt-5.5 [chatgpt-subscription]"].map((row, index) => `${at === index ? "→" : " "}   ${row}`).join("\n")}\n  Model Name: Claude Opus 4.8\n${"─".repeat(40)}\n/tmp/app • $0.000 (sub) • 0/1M (0.0%) (auto)  (anthropic) claude-opus-4-8 • effort medium\n(😺 OmO Native)\n`,
+      },
+      {
+        name: "omp's model picker, over the rule between its recent model and the rest", agent: "omp", status: "idle", rows: 3, choice: { option_index: 2 },
+        sent: ["down", "down", "enter"],
+        draw: (at) => ompPicker(at),
       },
       {
         // the last row drawn carries the cursor where it carried `↓`, under another effort line
@@ -5987,5 +6004,80 @@ favorite
     const rule = wide.lastIndexOf("─");
     expect(parseInteractivePrompt("omo", `${wide.slice(0, wide.indexOf("Model Name"))}some other output\n${wide.slice(wide.indexOf("Model Name"))}`)).toBeNull();
     expect(rule).toBeGreaterThan(0);
+  });
+});
+
+// Captured from omp 18.11.1 running /switch in an isolated herdr session at 120 columns by 40: the
+// picker as it opens, after ↓ was pressed eight times, and after `sol` was typed and ↓ pressed
+// once; and as it opened from the chat's `/model` in a browser that left the pane 94 columns by
+// 18. Provider names and the pane's folder are renamed in the files.
+describe("omp's model picker", () => {
+  const capture = (name: string) => readFileSync(new URL(`./fixtures/omp-switch-18.11.1-${name}.txt`, import.meta.url), "utf8");
+  const wide = capture("wide");
+  const scrolled = capture("scrolled");
+  const filtered = capture("filtered");
+  const short = capture("short");
+  const labels = (prompt: InteractivePrompt | null) => prompt?.options.map((option) => option.label);
+
+  test("reads the picker /switch opens, naming the model in use and the models under its window", () => {
+    const prompt = parseInteractivePrompt("omp", wide)!;
+    expect(prompt.kind).toBe("question");
+    expect(prompt.question).toBe("Select model for this session (currently litellm/claude-opus-5-5). More models are listed in the terminal.");
+    // the name alone: neither the mark on the model in use, its figures nor the scrollbar after them
+    expect(labels(prompt)).toEqual([
+      "litellm/claude-opus-5-5", "litellm/gpt-5.6-sol", "litellm/deepseek-v4-flash", "litellm/gpt-6.1-sol",
+      "litellm-anthropic/gemini-3.8-flash-high", "litellm/gpt-6-astra", "litellm/claude-opus-4-6-thinking",
+    ]);
+    expect(prompt.options.every((option) => option.description === null)).toBe(true);
+    expect(prompt.custom_option_index).toBeNull();
+    expect(answerKeys(prompt, { option_index: 2 })).toEqual([{ keys: ["down"] }, { keys: ["down"] }, { keys: ["enter"] }]);
+  });
+
+  test("reads a window scrolled past the rule between recent models and the rest, from where the cursor stands", () => {
+    const prompt = parseInteractivePrompt("omp", scrolled)!;
+    // the model in use has scrolled out of the window
+    expect(prompt.question).toBe("Select model for this session. More models are listed in the terminal.");
+    expect(labels(prompt)).toEqual([
+      "litellm/gpt-6.1-sol", "litellm-anthropic/gemini-3.8-flash-high", "litellm/gpt-6-astra",
+      "litellm/claude-opus-4-6-thinking", "litellm/gpt-oss-120b", "litellm/gpt-oss-120b-medium",
+    ]);
+    // ↑/↓ step over the rule: one key per model
+    expect(answerKeys(prompt, { option_index: 3 })).toEqual([{ keys: ["up"] }, { keys: ["up"] }, { keys: ["enter"] }]);
+  });
+
+  test("reads what a search left, which fits the window", () => {
+    const prompt = parseInteractivePrompt("omp", filtered)!;
+    expect(prompt.question).toBe("Select model for this session");
+    expect(labels(prompt)).toEqual(["litellm/gpt-6.1-sol", "litellm/gpt-6-sol", "litellm/gpt-5.6-sol"]);
+    expect(answerKeys(prompt, { option_index: 0 })).toEqual([{ keys: ["up"] }, { keys: ["enter"] }]);
+  });
+
+  test("reads a short pane's five rows under a footer cut at its edge", () => {
+    expect(short).toContain("⌥P task …");
+    const prompt = parseInteractivePrompt("omp", short)!;
+    expect(prompt.question).toBe("Select model for this session (currently litellm/claude-opus-5-5). More models are listed in the terminal.");
+    expect(labels(prompt)).toEqual([
+      "litellm/claude-opus-5-5", "litellm/gpt-5.6-sol", "litellm/deepseek-v4-flash", "litellm/gpt-6.1-sol", "litellm-anthropic/gemini-3.8-flash-high",
+    ]);
+  });
+
+  test("says on a model the conversation overflows that omp compacts it first", () => {
+    const over = scrolled.replace("litellm/gpt-oss-120b   ", "litellm/gpt-oss-120b ⦸ context>131k");
+    expect(over).not.toBe(scrolled);
+    const prompt = parseInteractivePrompt("omp", over)!;
+    expect(prompt.options[4]).toEqual({ label: "litellm/gpt-oss-120b", description: "The conversation is over its 131k context: omp compacts it first" });
+  });
+
+  test("is gone once the picker is, and reads neither its quick roles nor its task models", () => {
+    // Esc: the picker leaves the screen, which ends in omp's input box again
+    expect(parseInteractivePrompt("omp", wide.slice(0, wide.indexOf("╭─ Switch Model")))).toBeNull();
+    // anything under it is not omp's picker, which is drawn over the bottom of the screen
+    expect(parseInteractivePrompt("omp", `${wide}some later output\n`)).toBeNull();
+    // a leading `@` lists quick roles, and Alt+P the model for task subagents: not the session's model
+    expect(parseInteractivePrompt("omp", wide.replace("Session-only switch — role models stay unchanged", "Quick role switch — applies its model and thinking for this session"))).toBeNull();
+    expect(parseInteractivePrompt("omp", wide.replace("╭─ Switch Model ─", "╭─ Switch Task Model ─"))).toBeNull();
+    expect(parseInteractivePrompt("omp", wide.replace("use for this session", "use for Task subagents"))).toBeNull();
+    // another agent's pane draws no such picker
+    expect(parseInteractivePrompt("pi", wide)).toBeNull();
   });
 });
