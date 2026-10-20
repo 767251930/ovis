@@ -56,6 +56,7 @@ type Responder =
   | "pi-model"
   | "omo-model"
   | "omp-model"
+  | "omp-effort"
   | "hermes-question"
   | "hermes-input"
   | "omp-submit"

@@ -201,10 +201,12 @@ describe("omp command discovery", () => {
 
 // Canonical registry: can1357/oh-my-pi 53a0377d packages/coding-agent/src/slash-commands/builtin-*.ts
 describe("omp builtin registry", () => {
-  const formerExclusions = ["resume", "settings", "agents", "mcp", "plugins", "skills", "effort", "tree"];
+  const formerExclusions = ["resume", "settings", "agents", "mcp", "plugins", "skills", "tree"];
 
   it("offers every former reserved-name exclusion as a terminal-bound builtin", () => {
     expect(source.builtins).toContain("model");
+    expect(source.builtins).toContain("effort");
+    expect(source.terminalBound).not.toContain("effort");
     for (const name of formerExclusions) {
       expect(source.builtins).toContain(name);
       expect(source.terminalBound).toContain(name);
@@ -226,9 +228,10 @@ describe("omp builtin registry", () => {
     for (const name of ["compact", "btw", "handoff", "todo", "export", "switch"]) expect(source.terminalBound).not.toContain(name);
   });
 
-  it("gives model, handoff and btw their own forms", () => {
+  it("gives model, effort, handoff and btw their own forms", () => {
     // a bare /model reaches omp as /switch, whose session-only picker the omp-model card answers
     expect(source.forms?.model).toEqual([{ match: "bare", interaction: "dialog", dialog: "omp-model" }, { match: "other", interaction: "none" }]);
+    expect(source.forms?.effort).toEqual([{ match: "bare", interaction: "dialog", dialog: "omp-effort" }, { match: "other", interaction: "none" }]);
     expect(source.forms?.handoff).toEqual([{ match: "bare", interaction: "unknown" }]);
     expect(source.forms?.btw).toEqual([{ match: "bare", interaction: "none" }, { match: "other", interaction: "none" }]);
     expect(source.pin).toBe("18.12.3");

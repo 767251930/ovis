@@ -4656,6 +4656,16 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
     ].join("\n");
   };
 
+  /** omp's thinking level picker for a model that takes low to max */
+  const ompEffort = (at: number) => {
+    const levels = [["off", "No reasoning"], ["auto", "Auto-detect per prompt"], ["low", "Light reasoning (~2k tokens)"], ["medium", "Moderate reasoning (~8k tokens)"], ["high", "Deep reasoning (~16k tokens)"]];
+    return [
+      `\n╭─ Thinking Level ${"─".repeat(60)}╮`,
+      ...levels.map(([label, description], index) => `│ ${at === index ? "❯" : " "} ${label!.padEnd(32)}${description!.padEnd(42)}│`),
+      `╰${"─".repeat(77)}╯\n`,
+    ].join("\n");
+  };
+
   // An ordinary answer that needs a move, on a screen drawn again the way each agent draws it
   // with the cursor on another row: every reader must still know its own menu there.
   describe("moves to a row that is not the cursor's and answers it", () => {
@@ -4816,6 +4826,7 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
       { id: "claude-effort", agent: "claude", move: "right", rereadMoves: true, draw: claudeEffort },
       { id: "codex-model", agent: "codex", move: "down", rereadMoves: true, draw: codexModels },
       { id: "omp-model", agent: "omp", move: "down", rereadMoves: true, draw: ompPicker },
+      { id: "omp-effort", agent: "omp", move: "down", rereadMoves: true, draw: ompEffort },
     ];
     for (const fixture of cases) for (const during of ["first move", "next read", "commit read", "asking ended"]) {
       test(`${fixture.id} preserves parent navigation when cancelled during ${during}`, async () => {
@@ -6092,6 +6103,36 @@ describe("omp's model picker", () => {
     expect(parseInteractivePrompt("omp", wide.replace("╭─ Switch Model ─", "╭─ Switch Task Model ─"))).toBeNull();
     expect(parseInteractivePrompt("omp", wide.replace("use for this session", "use for Task subagents"))).toBeNull();
     // another agent's pane draws no such picker
+    expect(parseInteractivePrompt("pi", wide)).toBeNull();
+  });
+});
+
+// Captured from omp 18.12.3 running a bare /effort in an isolated herdr session at 120 columns,
+// the session's model switched to openai-codex/gpt-6-luna, whose levels run from low to max.
+describe("omp's thinking level picker", () => {
+  const wide = readFileSync(new URL("./fixtures/omp-effort-18.12.3-wide.txt", import.meta.url), "utf8");
+  const labels = (prompt: InteractivePrompt | null) => prompt?.options.map((option) => option.label);
+
+  test("reads the levels /effort lists for the session's model, the cursor on the level in use", () => {
+    const prompt = parseInteractivePrompt("omp", wide)!;
+    expect(prompt.kind).toBe("question");
+    expect(prompt.question).toBe("Select thinking level for this session");
+    expect(labels(prompt)).toEqual(["off", "auto", "low", "medium", "high", "xhigh", "max"]);
+    expect(prompt.options[3]).toEqual({ label: "medium", description: "Moderate reasoning (~8k tokens)" });
+    expect(prompt.custom_option_index).toBeNull();
+    expect(answerKeys(prompt, { option_index: 5 })).toEqual([{ keys: ["down"] }, { keys: ["down"] }, { keys: ["enter"] }]);
+    expect(answerKeys(prompt, { option_index: 0 })).toEqual([{ keys: ["up"] }, { keys: ["up"] }, { keys: ["up"] }, { keys: ["enter"] }]);
+  });
+
+  test("offers only the levels omp lists, for a model that takes fewer", () => {
+    const fewer = wide.split("\n").filter((line) => !/\b(?:xhigh|max)\b/.test(line)).join("\n");
+    expect(labels(parseInteractivePrompt("omp", fewer))).toEqual(["off", "auto", "low", "medium", "high"]);
+  });
+
+  test("is gone once the picker is, and reads no other box or agent", () => {
+    expect(parseInteractivePrompt("omp", wide.slice(0, wide.indexOf("╭─ Thinking Level")))).toBeNull();
+    expect(parseInteractivePrompt("omp", `${wide}some later output\n`)).toBeNull();
+    expect(parseInteractivePrompt("omp", wide.replace("medium  ", "turbo   "))).toBeNull();
     expect(parseInteractivePrompt("pi", wide)).toBeNull();
   });
 });

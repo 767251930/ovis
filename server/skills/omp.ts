@@ -41,7 +41,7 @@ const TERMINAL_BOUND = [
   "logout", "new", "clear", "delete", "resume", "tan", "omfg", "cleanse", "debug", "exit", "restart", "skills",
   "live", "record", "pause", "quit", "seance",
   "changelog", "context", "tools", "usage", "stats", "session", "dirs",
-  "mcp", "plugins", "effort",
+  "mcp", "plugins",
 ] as const;
 const TERMINAL_FORMS: CommandForm[] = [{ match: "bare", interaction: "terminal" }, { match: "other", interaction: "terminal" }];
 const FORMS: Record<string, CommandForm[]> = {
@@ -50,6 +50,9 @@ const FORMS: Record<string, CommandForm[]> = {
   // Models hub, which saves the default role for later sessions, and /switch its session-only
   // picker, which the omp-model card answers. /model <args> sets the model and is stored as a model change.
   model: [{ match: "bare", interaction: "dialog", dialog: "omp-model" }, { match: "other", interaction: "none" }],
+  // A bare /effort opens omp's thinking level picker, which lists only the levels the session's
+  // model takes; /effort <level> sets it and is stored as a thinking level change.
+  effort: [{ match: "bare", interaction: "dialog", dialog: "omp-effort" }, { match: "other", interaction: "none" }],
   // omp compacts in place since 17.4.0; the form that opens its own dialog arrives with the handoff reader.
   handoff: [{ match: "bare", interaction: "unknown" }],
   btw: [{ match: "bare", interaction: "none" }, { match: "other", interaction: "none" }],

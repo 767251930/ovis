@@ -1,0 +1,28 @@
+
+                                            ████████████
+                                               ██  ██       ▄▀▀▄ █▀▄▀▄ █▀▀▄
+                                               ██  ██       ▀▄▄▀ █ █ █ █▄▄▀
+                                               ▒▒  ██                  █
+                                                   ██       v18.12.3
+
+                        Tip: Type `#` anywhere in your prompt for quick actions — copy the line
+                                      or the whole prompt, undo, jump the cursor
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ What's New
+
+ Updated to v18.12.3 · 91 changes across 3 releases
+ 1 breaking change · 20 added · 12 changed · 58 fixed · +15 earlier releases · Use /changelog full for history.
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Session-only model: openai-codex/gpt-6-luna. Use Alt+M or /model for roles.
+
+╭─ Thinking Level ────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│   off                             No reasoning                                                                      │
+│   auto                            Auto-detect per prompt                                                            │
+│   low                             Light reasoning (~2k tokens)                                                      │
+│ ❯ medium                          Moderate reasoning (~8k tokens)                                                   │
+│   high                            Deep reasoning (~16k tokens)                                                      │
+│   xhigh                           Extended reasoning (~32k tokens)                                                  │
+│   max                             Maximum reasoning the model supports                                              │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

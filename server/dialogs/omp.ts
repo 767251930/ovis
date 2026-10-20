@@ -345,6 +345,46 @@ function parseOmpModel(screen: string): ParsedPrompt | null {
   });
 }
 
+/**
+ * omp's thinking level picker (omp 18.12.3), which a bare `/effort` opens: a box titled
+ * `Thinking Level` drawn at the bottom of the screen, one row per level the session's model
+ * accepts (`off`, `auto`, then that model's own levels), the cursor on the level in use as it
+ * opens. omp lists only the levels the model takes, so the card offers no other.
+ */
+const OMP_EFFORT_TOP_RE = /^╭─ Thinking Level ─/;
+const OMP_EFFORT_BOTTOM_RE = /^╰─+╯$/;
+/** a row: the cursor, the level's label, then omp's description of it */
+const OMP_EFFORT_ROW_RE = /^(❯ )?(off|auto|inherit|min|low|medium|high|xhigh|max)(?:\s+(.*))?$/;
+
+function parseOmpEffort(screen: string): ParsedPrompt | null {
+  const lines = screen.replace(ANSI_RE, "").split(/\r?\n/);
+  let bottom = lines.length - 1;
+  while (bottom >= 0 && !lines[bottom]!.trim()) bottom -= 1;
+  if (bottom < 2 || !OMP_EFFORT_BOTTOM_RE.test(lines[bottom]!.trim())) return null;
+  const top = findLastIndex(lines, (line, index) => index < bottom && OMP_EFFORT_TOP_RE.test(line.trim()));
+  if (top < 0 || bottom - top < 2) return null;
+  const rows: { label: string; description: string | null; cursor: boolean }[] = [];
+  for (const raw of lines.slice(top + 1, bottom)) {
+    const row = OMP_EFFORT_ROW_RE.exec(cleanLine(raw));
+    if (!row) return null;
+    rows.push({ label: row[2]!, description: row[3]?.trim() || null, cursor: row[1] !== undefined });
+  }
+  if (rows.filter((row) => row.cursor).length !== 1) return null;
+  const labels = rows.map((row) => row.label);
+  return finishPrompt("omp", {
+    kind: "question",
+    title: "",
+    question: "Select thinking level for this session",
+    body: null,
+    options: rows.map((row) => ({ label: row.label, description: row.description })),
+    multi_select: false,
+    custom_option_index: null,
+  }, {
+    responder: "omp-effort", menuLabels: labels, selectedIndex: rows.findIndex((row) => row.cursor), checkedOptionIndices: [], customMenuIndex: null,
+    rejectWithEscapeIndex: null,
+  });
+}
+
 export const readers: readonly DialogReader[] = [
   {
     id: "omp-question", agents: ["omp"], priority: 10,
@@ -383,6 +423,18 @@ export const readers: readonly DialogReader[] = [
     parse: (screen) => {
       const parsed = parseOmpModel(screen);
       return parsed?.responder === "omp-model" ? parsed : null;
+    },
+  },
+  {
+    id: "omp-effort", agents: ["omp"], priority: 50,
+    // closed under the moves, its arrows would land in omp's input box, as the model picker's would
+    reread: "each-move", list: "none",
+    interaction: (parsed) => pickerPlan(parsed, parseOmpEffort,
+      parsed.options.map((_, index) => keySteps([...navigationKeys(index - parsed.selectedIndex), KEY.enter])),
+      (shown, cursor) => shown.options[cursor]?.label),
+    parse: (screen) => {
+      const parsed = parseOmpEffort(screen);
+      return parsed?.responder === "omp-effort" ? parsed : null;
     },
   },
 ];
