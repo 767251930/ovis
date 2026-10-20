@@ -372,7 +372,9 @@ export const readers: readonly DialogReader[] = [
   },
   {
     id: "omp-model", agents: ["omp"], priority: 40,
-    reread: "before-commit", list: "none",
+    // closed under the moves (Esc in the terminal), the picker leaves omp's input box, which takes
+    // ↑/↓ as its history: every move after the first waits for the picker on the row before it
+    reread: "each-move", list: "none",
     // ↑/↓ step over the rule between recent and other models, as the rows do. omp reorders its
     // rows when its catalogue refreshes under them, which the name under the cursor catches
     interaction: (parsed) => pickerPlan(parsed, parseOmpModel,

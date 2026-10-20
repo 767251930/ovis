@@ -4643,24 +4643,25 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
     });
   });
 
+  /** omp's session-only model picker, a rule between its recent model and the rest, which ↑/↓ step over */
+  const ompPicker = (at: number) => {
+    const box = (text: string) => `│ ${text.padEnd(86)} │`;
+    const row = (index: number, name: string) => box(`${at === index ? "❯" : " "} ${name}`);
+    return [
+      `\n╭─ Switch Model ${"─".repeat(73)}╮`, box(" Session-only switch — role models stay unchanged"), box(" 🔍 >"), box(""),
+      row(0, "litellm/claude-opus-5-5 ●          1m ◫  $4/20"), box(`  ${"─".repeat(80)}`),
+      row(1, "litellm/gpt-6-sol                1.1m ◫  $2/10"), row(2, "litellm/gpt-5.6-sol              1.1m ◫  $4/20"), box(""),
+      box("  GPT 6 Sol (LiteLLM) · 1.1m ctx · 128k out"), box(""),
+      box("↑/↓ models · ⏎ use for this session · type to search · @ quick roles · ⎋ close"), `╰${"─".repeat(88)}╯\n`,
+    ].join("\n");
+  };
+
   // An ordinary answer that needs a move, on a screen drawn again the way each agent draws it
   // with the cursor on another row: every reader must still know its own menu there.
   describe("moves to a row that is not the cursor's and answers it", () => {
     const rule = "─".repeat(120);
     const omoFooter = `${rule}\n/private/tmp/omo-ask${" ".repeat(74)}[----------] 42K/1M (4.2%)\n${" ".repeat(86)}claude-opus-5-5 · high · OmO 5.1.7\n`;
     const mark = (at: number, row: number, on = "❯") => at === row ? on : " ";
-    /** omp's session-only model picker, a rule between its recent model and the rest, which ↑/↓ step over */
-    const ompPicker = (at: number) => {
-      const box = (text: string) => `│ ${text.padEnd(86)} │`;
-      const row = (index: number, name: string) => box(`${mark(at, index)} ${name}`);
-      return [
-        `\n╭─ Switch Model ${"─".repeat(73)}╮`, box(" Session-only switch — role models stay unchanged"), box(" 🔍 >"), box(""),
-        row(0, "litellm/claude-opus-5-5 ●          1m ◫  $4/20"), box(`  ${"─".repeat(80)}`),
-        row(1, "litellm/gpt-6-sol                1.1m ◫  $2/10"), row(2, "litellm/gpt-5.6-sol              1.1m ◫  $4/20"), box(""),
-        box("  GPT 6 Sol (LiteLLM) · 1.1m ctx · 128k out"), box(""),
-        box("↑/↓ models · ⏎ use for this session · type to search · @ quick roles · ⎋ close"), `╰${"─".repeat(88)}╯\n`,
-      ].join("\n");
-    };
     const cases: { name: string; agent: string; status?: string; rows: number; start?: number; draw: (at: number, ticked: number[]) => string; choice: Parameters<typeof answer>[1]; sent: string[] }[] = [
       {
         name: "omp's permission: Deny", agent: "omp", rows: 2, choice: { option_index: 1 }, sent: ["down", "enter"],
@@ -4814,6 +4815,7 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
       { id: "claude-model", agent: "claude", move: "down", rereadMoves: true, draw: claudeModelList },
       { id: "claude-effort", agent: "claude", move: "right", rereadMoves: true, draw: claudeEffort },
       { id: "codex-model", agent: "codex", move: "down", rereadMoves: true, draw: codexModels },
+      { id: "omp-model", agent: "omp", move: "down", rereadMoves: true, draw: ompPicker },
     ];
     for (const fixture of cases) for (const during of ["first move", "next read", "commit read", "asking ended"]) {
       test(`${fixture.id} preserves parent navigation when cancelled during ${during}`, async () => {
@@ -4839,6 +4841,18 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
         });
       });
     }
+  });
+
+  // a refusal waits out the answer's own 1.5 s for the picker to show the row
+  test("sends no further arrow into omp's input once its model picker closes under the moves", async () => {
+    await withPane("omp", "idle", ompPicker(0), async (pane) => {
+      const prompt = (await card())!;
+      // Esc in the terminal right after the first ↓: omp's input box takes ↑/↓ as its history
+      pane.onSent = (sent) => { if (sent === "down") pane.screen = "\n> \n"; };
+      const result = await answer(prompt.id, { option_index: 2 });
+      expect(pane.sent, "a closed picker must not receive the remaining arrows").toEqual(["down"]);
+      expect(result).toEqual({ status: 409, code: "prompt_changed" });
+    });
   });
 
   test("an interaction plan sends no commit when Claude's highlight moves past the requested model", async () => {

@@ -20,7 +20,11 @@ export interface DialogReader {
   agents: readonly string[];
   priority: number;
   parse(screen: string, ctx: ReaderContext): ParsedPrompt | null;
-  reread: "before-commit" | "none";
+  /**
+   * When the answer looks at the screen again: before its commit, or also before every move after
+   * the first, for a picker that closes onto an input box where the remaining arrows would land
+   */
+  reread: "each-move" | "before-commit" | "none";
   list: "none" | "letter-window" | "slider";
   interaction?(parsed: ParsedPrompt): InteractionPlan;
 }

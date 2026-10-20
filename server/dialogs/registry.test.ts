@@ -20,7 +20,7 @@ const snapshot: Record<string, readonly [DialogReader["reread"], DialogReader["l
   "omp-question": ["none", "none"],
   "omp-submit": ["none", "none"],
   "omp-approval": ["none", "none"],
-  "omp-model": ["before-commit", "none"],
+  "omp-model": ["each-move", "none"],
   "omo-model": ["before-commit", "none"],
   "omo-question": ["before-commit", "none"],
   "omo-typing": ["none", "none"],
