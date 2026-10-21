@@ -1459,6 +1459,7 @@ try {
         await view.route((url) => url.pathname === "/api/fs/file" && url.searchParams.get("render") === "1", async (route) => { asked(); await held; await route.continue(); }, { times: 1 });
         await open();
         await rendering;
+        await sheetsSettled(view);
         await shoot(view, "loading");
         release();
         const frame = view.frameLocator(".file-viewer-page");
