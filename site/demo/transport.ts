@@ -1547,7 +1547,12 @@ class DemoSocket extends EventTarget {
               : { type: "submit-result", id: message.id, pane_id: message.pane_id, ok: false, code: "invalid_submit_id", message: "This resend id already belongs to another message." });
             break;
           }
-          const text = queued ? message.text.replace(/[\r\n]+$/, "").replace(/\r\n?/g, "\n") : message.text;
+          const text = message.text.replace(/[\r\n]+$/, "").replace(/\r\n?/g, "\n");
+          // an immediate submit's framing, as the bridge checks it (server/core/composer.ts submitFraming)
+          const body = text.replace(/\n/g, "\r");
+          const framingLimit = message.typed === true ? 32_768 : 20_000;
+          const badFraming = !queued && (text.length > framingLimit || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(text)
+            || (message.payload !== body && message.payload !== `\u001b[200~${body}\u001b[201~`));
           let code: string | null = null;
           if ((message.delivery !== undefined && message.delivery !== "immediate" && !queued) || (queued && message.typed !== undefined && message.typed !== false)) code = "invalid_delivery";
           else if (message.clear_draft !== undefined && (typeof message.clear_draft !== "string" || !message.clear_draft
@@ -1561,9 +1566,11 @@ class DemoSocket extends EventTarget {
           else if (message.resend_generation !== undefined && (typeof message.resend_generation !== "number" || !Number.isSafeInteger(message.resend_generation) || message.resend_generation < 0 || message.resend_id === undefined)) code = "invalid_delivery";
           else if (resendKey !== null && heldCopyResends.size >= 256) code = "pending_limit";
           else if (queued && (text.trim().length === 0 || text.length > 20_000 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(text))) code = "invalid_submit_text";
+          else if (badFraming) code = "invalid_submit_text";
           else if (queued) code = this.pendingTargetError(message.pane_id);
           if (code) {
-            const reply: Extract<ServerMessage, { type: "submit-result" }> = { type: "submit-result", id: message.id, pane_id: message.pane_id, ok: false, code, message: "The demo agent cannot take this submission." };
+            const reply: Extract<ServerMessage, { type: "submit-result" }> = { type: "submit-result", id: message.id, pane_id: message.pane_id, ok: false, code,
+              message: badFraming ? `A message must be at most ${framingLimit} characters, without terminal control characters or paste markers, and sent as the composer shapes it; nothing was typed` : "The demo agent cannot take this submission." };
             if (resendKey !== null && this.mode !== "observe" && code !== "pending_limit" && !previous) heldCopyResends.set(resendKey, { text: message.text, reply, at: Date.now() });
             this.completeRequest(reply);
             break;

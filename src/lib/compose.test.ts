@@ -214,6 +214,23 @@ describe("composerPayload", () => {
     expect(composerPayload("", false)).toBe("");
   });
 
+  it("drops whole paste markers from the message, so its text and its paste agree and neither ends early", () => {
+    const pasted = "run this\u001b[201~\rtouch /tmp/x\n\u001b[200~next";
+    expect(composerMessage(pasted)).toBe("run this\ntouch /tmp/x\nnext");
+    expect(composerPayload(pasted, true)).toBe("\u001b[200~run this\rtouch /tmp/x\rnext\u001b[201~");
+    expect(composerPayload(pasted, false)).toBe("run this\rtouch /tmp/x\rnext");
+    // dropping one marker cannot leave another made of the bytes around it
+    expect(composerMessage("a\u001b[20\u001b[201~0~b")).toBe("ab");
+    // a marker at the end goes before the trailing newlines it hid
+    expect(composerMessage("ls\n\u001b[201~")).toBe("ls");
+  });
+
+  it("keeps every other escape byte, which the bridge refuses rather than having it rewritten here", () => {
+    expect(composerMessage("\u001b[31mred\u001b[0m")).toBe("\u001b[31mred\u001b[0m");
+    expect(composerMessage("half \u001b[201")).toBe("half \u001b[201");
+    expect(composerPayload("tab\there 한글 ✓", true)).toBe("\u001b[200~tab\there 한글 ✓\u001b[201~");
+  });
+
   it("caps what one send can carry", () => {
     expect(MAX_COMPOSER_CHARS).toBeLessThanOrEqual(20_000);
     expect(composerPayload("x".repeat(MAX_COMPOSER_CHARS), false)).toHaveLength(MAX_COMPOSER_CHARS);

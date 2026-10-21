@@ -1317,6 +1317,11 @@ export type ClientMessage =
    * the message as written (agent.prompt pastes it itself), `payload` the same shaped for the
    * pane's bracketed-paste mode, typed when no agent is in front. `typed`: the terminal's own
    * input line, which types `payload` like the keyboard would even into an agent's open menu.
+   * An immediate submit (no `delivery`, or `immediate`) is canonical or refused with invalid_submit_text before
+   * anything is typed or a draft cleared: `text` holds no terminal control character but tab and newline (so no
+   * paste marker), at most 20000 characters (32768 with `typed`) once trailing newlines are dropped and CRLF or a
+   * lone CR read as LF, and `payload` is that text with each LF a CR, bare or inside exactly one ESC[200~ ESC[201~
+   * pair. A queued or held message types `text` only, and `payload` is not read.
    * `delivery:queue` requires "pending-input" and a live interact attachment: while the agent
    * works the bridge keeps the message until its next turn, or the owner explicitly steers it.
    * `delivery:hold` (feature "pending-hold") is the same, except the message is kept as held, also

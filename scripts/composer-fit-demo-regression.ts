@@ -24,7 +24,7 @@ const LONG_MODEL = "gpt-5.6-sol-codex-preview-2026-10";
 // ids it names: "GPT-5.6" and "Opus 5.5"; null: the conversation names no model
 const NAMED = ["gpt-5.6", "claude-opus-5-5"] as const;
 
-interface Case { model: string | null; agent?: "claude" | "codex" | "pi" | "omo"; pending?: boolean; effort?: string | null; status?: "working" | "idle"; mic?: boolean; ring?: boolean; chatFontSize?: number | null; showUsage?: boolean; weeklyOnly?: boolean; suggestion?: string | null; contextUsed?: number; stream?: number; freezeConversation?: boolean; language?: "en" | "ko" | "ja" | "zh" }
+interface Case { model: string | null; agent?: "claude" | "codex" | "pi" | "omo"; pending?: boolean; effort?: string | null; status?: "working" | "idle"; mic?: boolean; ring?: boolean; chatFontSize?: number | null; showUsage?: boolean; weeklyOnly?: boolean; suggestion?: string | null; contextUsed?: number; stream?: number; freezeConversation?: boolean; language?: "en" | "ko" | "ja" | "zh"; theme?: "light" | "dark" }
 type Draw = "full" | "no-effort" | "out";
 interface ComposerScrollGeometry {
   height: number;
@@ -178,6 +178,8 @@ try {
       return value;
     };
     window.fitHoldSend = false;
+    // the browser's own socket, before the demo transport replaces it: an offline case connects nowhere with it
+    window.fitNativeSocket = window.WebSocket;
     const clone = structuredClone;
     window.structuredClone = (value, options) => fix(clone(value, options));
     const later = window.setTimeout.bind(window);
@@ -188,7 +190,7 @@ try {
     const json = Response.prototype.json;
     Response.prototype.json = async function () { return fix(await json.call(this)); };
   })();</script>`;
-  writeFileSync(index, html.replace(/<script type="module"/, () => `${patch}\n    <script src="./demo-transport.js"></script>\n    <script>(() => { const Socket = window.WebSocket; const Wrapped = function(...args) { const socket = new Socket(...args); window.fitSocket = socket;
+  writeFileSync(index, html.replace(/<script type="module"/, () => `${patch}\n    <script src="./demo-transport.js"></script>\n    <script>(() => { const Socket = window.WebSocket; const Wrapped = function(...args) { if (window.fitOffline) return new window.fitNativeSocket("ws://127.0.0.1:9/offline"); const socket = new Socket(...args); window.fitSocket = socket;
       const send = socket.send.bind(socket);
       socket.send = (raw) => {
         const frame = JSON.parse(raw);
@@ -219,7 +221,7 @@ try {
     const context = await browser.newContext({ viewport: { width, height: 844 }, hasTouch: touch, isMobile: touch, locale: state.language ?? "en-US" });
     try {
       await context.addInitScript((fitCase) => {
-        if (localStorage.getItem("herdr-web-ui:settings") === null) localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: fitCase.language ?? "en", voiceInput: fitCase.mic ? "on" : "off", chatFontSize: fitCase.chatFontSize ?? null, showUsage: fitCase.showUsage ?? false, usageCount: "used" }));
+        if (localStorage.getItem("herdr-web-ui:settings") === null) localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: fitCase.language ?? "en", voiceInput: fitCase.mic ? "on" : "off", chatFontSize: fitCase.chatFontSize ?? null, showUsage: fitCase.showUsage ?? false, usageCount: "used", ...(fitCase.theme ? { theme: fitCase.theme } : {}) }));
         Object.assign(window, { fitCase });
       }, { agent: "claude", pending: true, status: "working", effort: "xhigh", mic: false, ring: true, ...state });
       const page = await context.newPage();
@@ -348,6 +350,130 @@ try {
         await sent("Hardware keyboard sends");
       });
       console.log("PASS phone Return choice persists, desktop Mod+Enter stays, and native multiline paste reaches chat through Send");
+
+      // An immediate message's paste framing: a whole paste marker in the text is dropped before it is sent, so the
+      // message arrives as written; any other escape byte is refused by the bridge (here the demo's answer), and the
+      // draft stays with the reason. Observe-only and offline keep their own guards. With UI_EVIDENCE_DIR set, every
+      // state is captured as submit-framing-<width>-<theme>[-ko]-<state>.png, and the measured numbers are written.
+      const framingMeasures: Record<string, unknown>[] = [];
+      for (const [width, language] of [[390, "en"], [1440, "en"], [390, "ko"]] as const) for (const theme of ["light", "dark"] as const) await withCard(browser, width, { agent: "claude", model: "claude-opus-5-5", status: "idle", language, theme }, async (page) => {
+        const evidence = process.env.UI_EVIDENCE_DIR;
+        const name = `submit-framing-${width}-${theme}${language === "ko" ? "-ko" : ""}`;
+        const shot = async (state: string) => {
+          if (!evidence) return;
+          mkdirSync(evidence, { recursive: true });
+          await appFaces(page);
+          await page.screenshot({ path: join(evidence, `${name}-${state}.png`) });
+        };
+        const box = page.locator(".composer-text");
+        const button = page.locator(".composer-send");
+        const note = page.locator(".composer-note");
+        const conversation = () => page.evaluate(async (paneId) => JSON.stringify(await (await fetch(`/api/pane/conversation?pane_id=${encodeURIComponent(paneId)}`)).json()), panes.api);
+        const noOverflow = async (state: string) => assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, `${name} ${state}: no horizontal scroll`);
+        const measure = async (state: string) => {
+          const numbers = await page.evaluate(() => {
+            const send = document.querySelector<HTMLElement>(".composer-send")!.getBoundingClientRect();
+            const text = document.querySelector<HTMLElement>(".composer-text")!;
+            const noteNode = document.querySelector<HTMLElement>(".composer-note");
+            const rgb = (value: string) => (value.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number);
+            const lum = ([r, g, b]: number[]) => { const c = [r!, g!, b!].map((v) => { const s = v / 255; return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4; }); return 0.2126 * c[0]! + 0.7152 * c[1]! + 0.0722 * c[2]!; };
+            const background = (node: HTMLElement | null): string => { for (let at = node; at; at = at.parentElement) { const color = getComputedStyle(at).backgroundColor; if (!/rgba\(.*,\s*0\)$/.test(color) && color !== "transparent") return color; } return getComputedStyle(document.body).backgroundColor; };
+            const ratio = (node: HTMLElement | null) => {
+              if (!node) return null;
+              const a = lum(rgb(getComputedStyle(node).color)), b = lum(rgb(background(node)));
+              return Math.round(((Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)) * 100) / 100;
+            };
+            return {
+              send: { width: send.width, height: send.height }, messageFontPx: parseFloat(getComputedStyle(text).fontSize),
+              textContrast: ratio(text), note: noteNode ? { text: noteNode.textContent, role: noteNode.getAttribute("role"), contrast: ratio(noteNode), selectable: getComputedStyle(noteNode).userSelect !== "none" } : null,
+              sendName: document.querySelector<HTMLElement>(".composer-send")!.getAttribute("aria-label"),
+            };
+          });
+          framingMeasures.push({ file: `${name}-${state}.png`, width, theme, language, state, ...numbers });
+          return numbers;
+        };
+        await page.locator(".composer-surface").waitFor();
+        // empty: nothing to send yet
+        await shot("empty");
+        assert.equal(await button.isDisabled(), true, "an empty message box has nothing to send");
+        await shot("disabled");
+        // ordinary multiline Unicode content, with a whole paste marker pasted inside it
+        const written = language === "ko" ? "첫 단계를 실행해\n그다음 두 번째 단계 ✓" : "Run step one\nthen step two ✓";
+        await box.fill(written.replace("\n", "\n\u001b[201~"));
+        await box.evaluate((node: HTMLTextAreaElement) => node.blur());
+        await shot("multiline");
+        await shot("rest");
+        if (width === 1440) { await button.hover(); await shot("hover"); }
+        // keyboard focus on Send shows the ring
+        await box.focus();
+        await page.keyboard.press("End");
+        await button.focus();
+        assert.equal(await button.evaluate((node) => node.matches(":focus-visible") && getComputedStyle(node).outlineStyle !== "none"), true, `${name}: Send shows a focus ring`);
+        await shot("focus");
+        const sendBox = (await button.boundingBox())!;
+        // pressed and released away: nothing goes
+        await page.mouse.move(sendBox.x + sendBox.width / 2, sendBox.y + sendBox.height / 2);
+        await page.mouse.down();
+        await shot("pressed");
+        await page.mouse.move(0, 0);
+        await page.mouse.up();
+        assert.equal(await box.inputValue(), written.replace("\n", "\n\u001b[201~"));
+        // loading: the receipt is held
+        await page.evaluate(() => { (window as any).fitHoldSend = true; });
+        await button.click();
+        await page.waitForFunction(() => document.querySelector(".composer-send")?.getAttribute("aria-busy") === "true");
+        await shot("loading");
+        await page.evaluate(() => { (window as any).fitHoldSend = false; (window as any).fitReply(false); });
+        await page.waitForFunction(() => !document.querySelector(".composer-send")?.hasAttribute("aria-busy"));
+        // sent for real: the marker is gone, the message is as written
+        await note.waitFor();
+        await box.fill(written.replace("\n", "\n\u001b[201~"));
+        await button.click();
+        await page.waitForFunction(() => document.querySelector<HTMLTextAreaElement>(".composer-text")?.value === "");
+        await page.waitForFunction(async ({ paneId, text }) => {
+          const turns = (await (await fetch(`/api/pane/conversation?pane_id=${encodeURIComponent(paneId)}`)).json()).turns;
+          return turns.some((turn: { role: string; parts: { kind: string; text?: string }[] }) => turn.role === "user" && turn.parts.some((part) => part.kind === "text" && part.text === text));
+        }, { paneId: panes.api, text: written }, { timeout: 5_000 });
+        assert.ok(!(await conversation()).includes("\\u001b"), "no escape byte reached the conversation");
+        // error: an escape byte that is no paste marker is refused, typed nowhere, and the draft stays with the reason
+        const refused = language === "ko" ? "이 초안은 \u001b[31m남아야 합니다" : "keep \u001b[31mthis draft";
+        await box.fill(refused);
+        await button.click();
+        await note.filter({ hasText: "paste markers" }).waitFor();
+        assert.equal(await box.inputValue(), refused, "the refused draft stays as it was");
+        assert.equal(await button.isEnabled(), true, "and can be edited and sent again");
+        assert.ok(!(await conversation()).includes("31m"), "nothing of the refused message reached the agent");
+        await noOverflow("error");
+        await measure("error");
+        await shot("error");
+        // long unbroken content, scrolled to its end
+        await box.fill(`${"unbroken".repeat(120)}END`);
+        await box.evaluate((node: HTMLTextAreaElement) => { node.focus(); node.setSelectionRange(node.value.length, node.value.length); node.scrollTop = node.scrollHeight; });
+        await noOverflow("long");
+        await shot("long-end");
+        await measure("long-end");
+        // observe-only: the connection only watches, so it offers no message box; the draft is back once it interacts
+        await box.fill(written);
+        await page.evaluate(() => (window as any).fitSocket.send(JSON.stringify({ type: "role", mode: "observe" })));
+        await box.waitFor({ state: "detached" });
+        assert.equal(await page.locator(".composer-send").count(), 0, "an observer has no Send");
+        await noOverflow("observe");
+        await shot("observe");
+        await page.evaluate(() => (window as any).fitSocket.send(JSON.stringify({ type: "role", mode: "interact" })));
+        await box.waitFor();
+        assert.equal(await box.inputValue(), written, "the draft is kept through observing");
+        assert.equal((await conversation()).split(written.split("\n")[0]!).length, 2, "and was not sent while observing");
+        // offline: Send waits for the connection, and the draft stays
+        await page.evaluate(() => { (window as any).fitOffline = true; (window as any).fitSocket.close(); });
+        await page.waitForFunction(() => document.querySelector(".conn-live") === null);
+        await page.waitForFunction(() => document.querySelector<HTMLButtonElement>(".composer-send")?.disabled === true);
+        assert.equal(await box.inputValue(), written, "an offline draft stays");
+        await noOverflow("offline");
+        await shot("offline");
+        await measure("offline");
+      });
+      if (process.env.UI_EVIDENCE_DIR) writeFileSync(join(process.env.UI_EVIDENCE_DIR, "submit-framing-measurements.json"), `${JSON.stringify(framingMeasures, null, 2)}\n`);
+      console.log("PASS immediate submit framing: a pasted marker is dropped, any other escape is refused with the draft kept, and observe-only and offline keep their guards, on phone and desktop in both themes and Korean");
 
       // Only the transport receipt is held: the real composer and draft lifecycle stay intact.
       for (const agent of ["claude", "codex"] as const) for (const width of [390, 1440]) for (const theme of ["dark", "light"] as const) await withCard(browser, width, { agent, model: agent === "claude" ? "claude-opus-5-5" : "gpt-5.6", status: "idle" }, async (page) => {

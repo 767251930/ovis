@@ -594,6 +594,97 @@ export async function checkTerminalInput(browser: Browser, origin: string, pane:
     console.log("PASS terminal input: desktop mode, owner drafts, reload, IME button, late ack, shortcuts, readiness, explicit send");
   } finally { await context.close(); }
   await checkKeyBarWhileLineComposes(browser, origin, pane);
+  await checkCanonicalSubmit(browser);
+}
+
+/**
+ * The terminal input line's multiline Unicode text, sent for real to a program that records its raw input: with
+ * bracketed paste on it gets one paste, with it off only the lines, and on a mirror (no PTY sidecar, so the browser
+ * never learns the mode) an agent's pane gets one paste the bridge adds, a plain one the lines; each time exactly
+ * one Enter of the bridge's own after them. The submit frames go to the bridge unchanged, which checks their framing.
+ */
+async function checkCanonicalSubmit(browser: Browser): Promise<void> {
+  const { createServer } = await import("../server/index.ts");
+  const { herdrRpc, workspaceCreate, workspaceClose } = await import("../server/herdr/client.ts");
+  const { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = mkdtempSync(join(tmpdir(), "herdr-canonical-submit-"));
+  const script = join(root, "record.cjs");
+  writeFileSync(script, `const fs=require("node:fs");const [out,mode]=process.argv.slice(2);process.stdin.setRawMode(true);process.stdin.resume();process.stdout.write((mode==="on"?"\\x1b[?2004h":"\\x1b[?2004l")+"$ ",()=>fs.writeFileSync(out,""));process.stdin.on("data",c=>fs.appendFileSync(out,JSON.stringify(c.toString("utf8"))+"\\n"));`);
+  const servers = { attached: createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: join(root, "attached") }), mirror: createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: join(root, "mirror"), terminalAttach: false }) };
+  const owned: string[] = [];
+  const text = "check canonical commit 한글\tcolumn\nsecond line ✓ 🙂";
+  const lines = text.replace(/\n/g, "\r");
+  const paste = `\u001b[200~${lines}\u001b[201~`;
+  const cases = [
+    { name: "attached, bracketed paste on", server: "attached", mode: "on", agent: false, bytes: paste },
+    // herdr's attach reports bracketed paste on to the browser whatever the program asked for (measured, herdr 0.9.5):
+    // there the pane gets exactly the canonical payload the browser shaped, and one Enter
+    { name: "attached, bracketed paste off", server: "attached", mode: "off", agent: false, bytes: null },
+    { name: "mirror fallback, agent pane", server: "mirror", mode: "on", agent: true, bytes: paste },
+    { name: "mirror fallback, plain pane", server: "mirror", mode: "off", agent: false, bytes: lines },
+  ] as const;
+  try {
+    for (const item of cases) {
+      const made = await workspaceCreate({ cwd: root, label: "herdr-web-ui-test-canonical-submit" });
+      owned.push(made.workspace.workspace_id);
+      const pane = made.root_pane.pane_id;
+      const log = join(root, `${owned.length}.jsonl`);
+      await herdrRpc("pane.send_text", { pane_id: pane, text: `exec '${process.execPath}' '${script}' '${log}' ${item.mode}\n` });
+      const started = Date.now() + 10_000;
+      while (!existsSync(log)) { assert(Date.now() < started, "the recorder did not start"); await new Promise((r) => setTimeout(r, 25)); }
+      if (item.agent) await herdrRpc("pane.report_agent", { pane_id: pane, source: "manual", agent: "claude", state: "idle" });
+      const bytes = () => readFileSync(log, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as string).join("");
+      const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+      await context.addInitScript((pane) => {
+        localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", terminalInputMode: "line" }));
+        localStorage.setItem(`herdr-web-ui:view:${pane}`, "terminal");
+      }, pane);
+      const page = await context.newPage();
+      const errors: string[] = [];
+      page.on("pageerror", (error) => errors.push(error.message));
+      page.setDefaultTimeout(10_000);
+      const submits: Array<{ text: string; payload: string; typed?: boolean }> = [];
+      page.on("websocket", (socket) => socket.on("framesent", ({ payload }) => {
+        const frame = JSON.parse(String(payload));
+        if (frame.type === "submit") submits.push(frame);
+      }));
+      const results: Array<{ ok: boolean; code?: string }> = [];
+      page.on("websocket", (socket) => socket.on("framereceived", ({ payload }) => {
+        const frame = JSON.parse(String(payload));
+        if (frame.type === "submit-result") results.push(frame);
+      }));
+      try {
+        await page.goto(`http://127.0.0.1:${servers[item.server].port}/?pane=${encodeURIComponent(pane)}`);
+        await page.locator(".conn-live").waitFor();
+        const line = page.getByRole("textbox", { name: "Terminal input line", exact: true });
+        await line.waitFor();
+        // the input line holds the program's prompt once the pane is drawn: the mode the program asked for came before it
+        await page.locator(".xterm-rows", { hasText: "$" }).waitFor();
+        await page.waitForFunction(() => document.querySelector(".terminal-banner") === null);
+        await line.fill(text);
+        await page.getByRole("button", { name: "Send to the terminal", exact: true }).click();
+        const deadline = Date.now() + 10_000;
+        while (results.length === 0) { assert(Date.now() < deadline, `${item.name}: no submit-result`); await new Promise((r) => setTimeout(r, 25)); }
+        assert.deepEqual(results, [{ ...results[0], ok: true }], `${item.name}: the bridge took the submit`);
+        assert.equal(submits.length, 1, `${item.name}: one submit`);
+        assert.equal(submits[0]!.text, text, `${item.name}: the text as written`);
+        assert.ok([lines, paste].includes(submits[0]!.payload), `${item.name}: a canonical payload, bare or wrapped once`);
+        const expected = `${item.bytes ?? submits[0]!.payload}\r`;
+        while (bytes() !== expected) {
+          assert(Date.now() < deadline + 5_000 && expected.startsWith(bytes()), `${item.name}: the pane got ${JSON.stringify(bytes())}, not ${JSON.stringify(expected)}`);
+          await new Promise((r) => setTimeout(r, 25));
+        }
+        assert.deepEqual(errors, []);
+        console.log(`PASS canonical multiline submit, ${item.name}: frame ${JSON.stringify({ text: submits[0]!.text, payload: submits[0]!.payload })} -> pane ${JSON.stringify(bytes())}`);
+      } finally { await context.close(); }
+    }
+  } finally {
+    servers.attached.stop(); servers.mirror.stop();
+    for (const id of owned) await workspaceClose(id).catch(() => {});
+    rmSync(root, { recursive: true, force: true });
+  }
 }
 
 /** A composition in the input line must not grey out the phone key bar: Esc and ^C go to the pane at once. */
