@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { _android } from "playwright-core";
 import { createServer } from "../server/index.ts";
 import { workspaceCreate, workspaceClose, paneSendText } from "../server/herdr/client.ts";
+import { lensInitScript, paneLensKey } from "./pane-lens.ts";
 
 const serial = process.env.ANDROID_IME_SERIAL;
 assert(serial && /^emulator-\d+$/.test(serial), "Set ANDROID_IME_SERIAL to an owned emulator (physical devices are deliberately refused)");
@@ -65,9 +66,9 @@ try {
   await adbRun("reverse", `tcp:${server.port}`, `tcp:${server.port}`);
   context = await device.launchBrowser({ hasTouch: true, viewport: null, args: ["--no-first-run", "--disable-fre"] });
   const page = await context.newPage();
+  await page.addInitScript(lensInitScript({ [paneLensKey(pane)]: "terminal" }));
   await page.addInitScript((pane) => {
     localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", terminalInputMode: "line" }));
-    localStorage.setItem(`herdr-web-ui:view:${pane}`, "terminal");
     (window as any).nativeImeEvents = [];
     for (const type of ["compositionstart", "compositionupdate", "compositionend", "keydown", "input"]) document.addEventListener(type, (event: any) => {
       if (event.target?.tagName === "TEXTAREA") (window as any).nativeImeEvents.push({ type, data: event.data, key: event.key, composing: event.isComposing, value: event.target.value });

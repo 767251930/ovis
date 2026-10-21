@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Browser } from "playwright-core";
 import { herdrRpc, paneClose, paneFocus, paneSplit, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
+import { lensInitScript, paneLensKey } from "./pane-lens.ts";
 
 /** A tapped pane alert shows an agent pane's chat once: the lens the pane remembered stays its own, and a shell keeps its terminal. */
 export async function checkNotificationView(browser: Browser, origin: string): Promise<void> {
@@ -21,15 +22,15 @@ export async function checkNotificationView(browser: Browser, origin: string): P
     }
     const [agent, shell] = panes as [string, string];
     await herdrRpc("pane.report_agent", { pane_id: agent, source: "manual", agent: "claude", state: "idle" });
+    await context.addInitScript(lensInitScript({ [paneLensKey(agent)]: "terminal" }, true));
     await context.addInitScript((pane) => {
       if (localStorage.getItem("herdr-web-ui:settings") !== null) return;
       localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en" }));
-      localStorage.setItem(`herdr-web-ui:view:${pane}`, "terminal"); // the agent pane remembered the terminal
     }, agent);
     const page = await context.newPage();
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
-    const saved = () => page.evaluate((pane) => localStorage.getItem(`herdr-web-ui:view:${pane}`), agent);
+    const saved = () => page.evaluate((key) => localStorage.getItem(key), paneLensKey(agent));
     /** the selected row and the lens drawn with it, both from the page: the stored selection is written before the render */
     const shows = (pane: string, lens: "Chat transcript" | "Live terminal") => page.waitForFunction(([id, title]) =>
       document.querySelector(".pane-select[aria-current='true']")?.getAttribute("title")?.startsWith(`${id} —`) === true

@@ -7,6 +7,7 @@ import { appFaces } from "./app-faces.ts";
 import panes from "../site/demo/fixtures/panes.json";
 import { buildDemoApp } from "./demo-build.ts";
 import { chromePath } from "./chrome-path.ts";
+import { demoPaneLensKey, lensInitScript } from "./pane-lens.ts";
 
 // A cancelled send the agent put back in its input box (`restored` on GET /api/pane/prompt), on
 // the unmodified app over the demo's fixture transport: the composer takes the text back without
@@ -139,9 +140,9 @@ try {
     try {
       const desktop = await browser.newContext({ viewport: { width: 1280, height: 800 }, locale: "en-US" });
       try {
+        await desktop.addInitScript(lensInitScript({ [demoPaneLensKey(panes.omp)]: "chat" }));
         await desktop.addInitScript((paneId) => {
           localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en" }));
-          localStorage.setItem(`herdr-web-ui:view:${paneId}`, "chat");
         }, panes.omp);
         const page = await desktop.newPage();
         const errors: string[] = [];

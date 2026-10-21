@@ -1,11 +1,13 @@
 import { expect, it } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentStatus, SessionSnapshot } from "../shared/protocol.ts";
 import machines from "../site/demo/fixtures/machines.json";
 import { CompletionTracker } from "./completion.ts";
-import { Finishes, finishHerdrIdentity } from "./finishes.ts";
+import { Finishes, finishHerdrIdentity, herdrLifetime } from "./finishes.ts";
+import { ComposerDraftStore } from "../src/lib/composerDraft.ts";
+import { composerDraftKey, paneStateOwner } from "../src/lib/paneState.ts";
 import { LaunchedAgents } from "./launched-agents.ts";
 import { shownStatus } from "../src/lib/sidebarOrder.ts";
 
@@ -127,5 +129,40 @@ it("recognizes a replaced socket file and Windows marker incarnation, never just
     expect(finishHerdrIdentity(first, "linux")).not.toBe(finishHerdrIdentity(second, "linux"));
     expect(finishHerdrIdentity(first, "win32")).not.toBe(finishHerdrIdentity(second, "win32"));
     expect(finishHerdrIdentity(join(dir, "missing"), "linux")).toBeNull();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+it("bridge restart preserves lifetime-scoped drafts", () => {
+  const dir = mkdtempSync(join(tmpdir(), "herdr-lifetime-"));
+  try {
+    const socket = join(dir, "herdr.sock");
+    writeFileSync(socket, "");
+    const data = new Map<string, string>();
+    const storage = { getItem: (key: string) => data.get(key) ?? null, setItem: (key: string, value: string) => { data.set(key, value); }, removeItem: (key: string) => { data.delete(key); } };
+    const before = new Finishes(() => finishHerdrIdentity(socket, "linux"));
+    const lifetime = herdrLifetime(before.herdrIdentity()!);
+    new ComposerDraftStore(() => storage).set(composerDraftKey(paneStateOwner("local", "w1:p1", lifetime)), "kept across the bridge restart");
+    // the bridge restarts: a new random finish epoch, the same herdr daemon and so the same lifetime
+    const after = new Finishes(() => finishHerdrIdentity(socket, "linux"));
+    expect(after.epoch).not.toBe(before.epoch);
+    const again = herdrLifetime(after.herdrIdentity()!);
+    expect(again).toBe(lifetime);
+    expect(new ComposerDraftStore(() => storage).read(composerDraftKey(paneStateOwner("local", "w1:p1", again))).text).toBe("kept across the bridge restart");
+    // opaque: no inode, device, pid or time reaches a browser
+    expect(lifetime).toMatch(/^[0-9a-f]{32}$/);
+    expect(lifetime).not.toContain(after.herdrIdentity()!.split(":")[1]!);
+    // a replaced socket file (a new herdr) is a new lifetime; one that cannot be read proves nothing
+    // (made while the old file still exists, so it cannot be handed the old inode)
+    const replacement = join(dir, "herdr.sock.new");
+    writeFileSync(replacement, "");
+    renameSync(replacement, socket);
+    expect(herdrLifetime(finishHerdrIdentity(socket, "linux")!)).not.toBe(lifetime);
+    rmSync(socket);
+    expect(after.herdrIdentity()).toBeNull();
+    // Windows: the pid:start marker's contents are the identity, a reused pid with another start is not the same herdr
+    writeFileSync(socket, "123:1790829888292852700");
+    const windows = herdrLifetime(finishHerdrIdentity(socket, "win32")!);
+    writeFileSync(socket, "123:1790829888292852701");
+    expect(herdrLifetime(finishHerdrIdentity(socket, "win32")!)).not.toBe(windows);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

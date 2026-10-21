@@ -15,6 +15,7 @@ import { AccessGate } from "./components/AccessGate.tsx";
 import { AgentMark } from "./components/AgentMark.tsx";
 import { NewSessionDialog, type NewTabTarget } from "./components/NewSessionDialog.tsx";
 import { SessionHistory } from "./components/SessionHistory.tsx";
+import { DraftRecovery } from "./components/DraftRecovery.tsx";
 import { sessionHistoryAgent, sessionHistoryListAgent } from "./lib/sessionHistory.ts";
 import { useRecentResumes } from "./lib/useRecentResumes.ts";
 import { forgetSessionHistoryProbesOfPcsAway } from "./lib/useSessionHistoryOffered.ts";
@@ -52,6 +53,7 @@ import { formatKeys, shortcutDisplayKeys, useShortcuts } from "./lib/shortcuts.t
 import { useMediaQuery } from "./lib/useMediaQuery.ts";
 import { useAnnouncedText } from "./lib/useAnnouncedText.ts";
 import { PaneLenses } from "./lib/paneLens.ts";
+import { memoryPaneState, PaneLifetimeContext, paneStateOwner } from "./lib/paneState.ts";
 import { paneContextPress } from "./lib/paneCanvas.ts";
 import type { AppActions, PaneView, PaneControls } from "./lib/actions.ts";
 import {
@@ -145,12 +147,13 @@ function storeSelection(machineId: string, paneId: string | null): void {
  * terminal.
  */
 /** `hasAgent`: herdr leaves `agent` out for a shell, so callers compare with `!= null` */
-function storedView(lenses: PaneLenses, picks: ReadonlyMap<string, PaneView>, paneId: string, machineId: string, hasAgent: boolean | null, terminalAttach: boolean): PaneView {
+function storedView(lenses: PaneLenses, picks: ReadonlyMap<string, PaneView>, paneId: string, machineId: string, lifetime: string | undefined, hasAgent: boolean | null, terminalAttach: boolean): PaneView {
   if (!terminalAttach) return "chat";
-  const key = paneStorageId(machineId, paneId);
+  // the pane in its herdr lifetime (lib/paneState.ts): a pane ID a new herdr reused keeps no lens of the last one
+  const key = paneStateOwner(machineId, paneId, lifetime);
   const picked = picks.get(key);
   if (picked !== undefined) return picked;
-  try {
+  if (!memoryPaneState(key)) try {
     const stored = window.localStorage.getItem(`herdr-web-ui:view:${key}`);
     if (stored === "chat" || stored === "terminal") return stored;
   } catch {
@@ -253,6 +256,11 @@ export function App() {
     return storedSelection()?.machine_id ?? "local";
   });
   const selectedMachine = machines.find((m) => m.id === selectedMachineId);
+  // each PC's herdr lifetime, from its latest snapshot: whose pane drafts and lenses are (lib/paneState.ts)
+  const lifetimeList = JSON.stringify(machines.flatMap((machine) => machine.snapshot?.herdr_lifetime ? [[machine.id, machine.snapshot.herdr_lifetime]] : []));
+  const paneLifetimes = useMemo(() => new Map<string, string>(JSON.parse(lifetimeList) as [string, string][]), [lifetimeList]);
+  const paneLifetimesRef = useRef(paneLifetimes);
+  paneLifetimesRef.current = paneLifetimes;
   const snapshot = selectedMachine?.snapshot ?? null;
   const machinesRef = useRef(machines); machinesRef.current = machines;
   const [updateRemote, setUpdateRemote] = useState(false);
@@ -526,6 +534,8 @@ export function App() {
   const [newTab, setNewTab] = useState<NewTabTarget | null>(null);
   // the earlier sessions of a workspace's folder (components/SessionHistory.tsx), while open
   const [sessionHistory, setSessionHistory] = useState<{ machineId: string; workspaceId: string; agent: SessionHistoryAgent } | null>(null);
+  // Recover unsent text, opened from a pane's menu for that pane (components/DraftRecovery.tsx)
+  const [draftRecovery, setDraftRecovery] = useState<{ machineId: string; paneId: string } | null>(null);
   const [connected, setConnected] = useState(false);
   /** the active terminal's socket has been connected on this page before (PaneTerminal reports it): not
    *  connected, the chip says reconnecting; before this page's first connection to the PC, connecting */
@@ -1008,11 +1018,11 @@ export function App() {
   // layout effect, and an attach in the previous pane's lens resized a pane whose lens is chat
   // a new Settings default is a new start for every pane's lens
   const lenses = useMemo(() => new PaneLenses(settings.defaultView), [settings.defaultView]);
-  const lensKey = JSON.stringify([selectedPaneId, selectedMachineId, selectedPane !== null, selectedAgent !== null, terminalAttach, settings.defaultView]);
+  const lensKey = JSON.stringify([selectedPaneId, selectedMachineId, paneLifetimes.get(selectedMachineId) ?? null, selectedPane !== null, selectedAgent !== null, terminalAttach, settings.defaultView]);
   const notificationView = notificationViewForPane(notificationViewTarget, selectedMachineId, selectedPaneId);
   let view = lens.view;
   if (lens.key !== lensKey) {
-    if (selectedPaneId !== null) view = storedView(lenses, viewPicks, selectedPaneId, selectedMachineId, selectedPane ? selectedAgent !== null : null, terminalAttach);
+    if (selectedPaneId !== null) view = storedView(lenses, viewPicks, selectedPaneId, selectedMachineId, paneLifetimes.get(selectedMachineId), selectedPane ? selectedAgent !== null : null, terminalAttach);
     setLens({ key: lensKey, view });
   }
   // a tapped alert's lens is drawn over the pane's own, never stored: once it is gone (the pane or
@@ -1045,9 +1055,10 @@ export function App() {
   const activity = useSidebarActivityState(machines, selectedMachineId, presentedPaneId, paneInFront, shareSeen);
 
   const pickView = useCallback((machineId: string, paneId: string, next: PaneView) => {
-    const key = paneStorageId(machineId, paneId);
+    const key = paneStateOwner(machineId, paneId, paneLifetimesRef.current.get(machineId));
     setViewPicks((current) => current.get(key) === next ? current : new Map(current).set(key, next));
-    try {
+    // a page-only owner (no proven lifetime) keeps its pick in this page alone
+    if (!memoryPaneState(key)) try {
       window.localStorage.setItem(`herdr-web-ui:view:${key}`, next);
     } catch {
       /* private mode: the lens is still picked for this page */
@@ -1428,7 +1439,7 @@ export function App() {
         setSessionHistory({ machineId: found.machineId, workspaceId: found.workspace.workspace_id, agent });
       },
       openPalette,
-      agentStarted: (machineId, paneId) => lenses.startedAgent(paneStorageId(machineId, paneId), window.matchMedia?.("(pointer: coarse)").matches === true),
+      agentStarted: (machineId, paneId) => lenses.startedAgent(paneStateOwner(machineId, paneId, paneLifetimesRef.current.get(machineId)), window.matchMedia?.("(pointer: coarse)").matches === true),
       openFind: () => {
         if (selectedPaneId === null) return;
         setView("terminal");
@@ -1582,7 +1593,7 @@ export function App() {
   if (locked) return <AccessGate reason={lockReason} initialCode={pairCode} onUnlocked={unlock} />;
 
   return (
-    <MachineSessionsProvider machineIds={machines.map((machine) => machine.id)}><MachineContext.Provider value={selectedMachineId}><div className={`app${sidebarCollapsed ? " sidebar-collapsed" : ""}`} style={sidebarWidth === null && filePanelWidth === null ? undefined : {
+    <MachineSessionsProvider machineIds={machines.map((machine) => machine.id)}><PaneLifetimeContext.Provider value={paneLifetimes}><MachineContext.Provider value={selectedMachineId}><div className={`app${sidebarCollapsed ? " sidebar-collapsed" : ""}`} style={sidebarWidth === null && filePanelWidth === null ? undefined : {
       ...(sidebarWidth === null ? {} : { "--sidebar-user-w": `${sidebarWidth}px` }),
       ...(filePanelWidth === null ? {} : { "--file-panel-user-w": `${filePanelWidth}px` }),
     } as CSSProperties}>
@@ -1741,7 +1752,7 @@ export function App() {
             const slotSnapshot = active ? snapshot : otherMachine?.snapshot ?? null;
             const attach = active ? terminalAttach : otherAttach;
             const lensOf = (item: HerdrPane): PaneView => active && item.pane_id === selectedPaneId ? view
-              : storedView(lenses, viewPicks, item.pane_id, machineId, item.agent != null, attach);
+              : storedView(lenses, viewPicks, item.pane_id, machineId, paneLifetimes.get(machineId), item.agent != null, attach);
             const slotView = active ? view : pane ? lensOf(pane) : "terminal";
             const onSelect = active ? selectPane : (id: string, focusInput = true) => selectInSlot(slot, machineId, id, focusInput);
             // one pane's panel keeps the page's own id, whichever slot draws it
@@ -1808,6 +1819,7 @@ export function App() {
                   <div id={slotPanelId} className="terminal-tabpanel" role={slotPanelLabel === null ? undefined : "tabpanel"} aria-label={slotPanelLabel ?? undefined}>
                   <PaneCanvas key={machineId} snapshot={slotSnapshot} pane={pane} selectedPaneId={paneId} onSelect={onSelect} onChanged={actions.refresh} actionsRef={active ? paneActionsRef : undefined}
                     onOpenInHalf={wideScreen ? (id, side) => dockSide({ machineId, paneId: id }, side) : undefined}
+                    onRecoverDrafts={(target) => setDraftRecovery({ machineId, paneId: target.pane_id })}
                     renderPane={(item, itemActive, herdrSplit) => <OpenFileContext.Provider value={item ? (path) => openFile({ path, paneId: item.pane_id, machineId }) : null}>
                       <PaneTerminal
                         presentationKey={paneContentKey(machine, item, item ? lensOf(item) : slotView)}
@@ -1893,6 +1905,7 @@ export function App() {
           void load();
         }}
       /></MachineContext.Provider>
+      {draftRecovery && <DraftRecovery machineId={draftRecovery.machineId} paneId={draftRecovery.paneId} machines={machines} lifetimes={paneLifetimes} onClose={() => setDraftRecovery(null)} />}
       {sessionHistory && sessionHistoryWorkspace && <MachineContext.Provider value={sessionHistory.machineId}><SessionHistory
         workspace={sessionHistoryWorkspace.workspace}
         panes={sessionHistoryWorkspace.panes}
@@ -1939,6 +1952,6 @@ export function App() {
         <FileViewer key={viewing.path} path={viewing.path} paneId={viewing.paneId} onClose={closeFile} onOpen={(path) => openFile({ ...viewing, path, presentation })} onKind={reportFileKind} onTogglePresentation={toggleFilePresentation} keyboardActive={!settingsOpen} />
       </MachineContext.Provider>}
       <CommandPalette key={selectedMachineId} machines={machines} onSelect={selectTarget} open={paletteOpen} initialQuery={paletteQuery} onClose={() => setPaletteOpen(false)} snapshot={snapshot} online={selectedMachine?.state === "connected"} selectedPaneId={selectedPaneId} view={view} actions={actions} />
-    </div></MachineContext.Provider></MachineSessionsProvider>
+    </div></MachineContext.Provider></PaneLifetimeContext.Provider></MachineSessionsProvider>
   );
 }

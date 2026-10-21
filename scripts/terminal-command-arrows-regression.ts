@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { paneRead, paneSendKeys } from "../server/herdr/client.ts";
 import { chromePath } from "./chrome-path.ts";
+import { lensInitScript, paneLensKey } from "./pane-lens.ts";
 
 async function until(check: () => boolean | Promise<boolean>, label: string): Promise<void> {
   const deadline = Date.now() + 10_000;
@@ -18,10 +19,10 @@ async function until(check: () => boolean | Promise<boolean>, label: string): Pr
 export async function checkCommandArrows(browser: Browser, origin: string, paneId: string): Promise<void> {
   for (const platform of ["MacIntel", "Linux x86_64", "Win32"]) {
     const context = await browser.newContext({ viewport: { width: 1100, height: 650 } });
+    await context.addInitScript(lensInitScript({ [paneLensKey(paneId)]: "terminal" }));
     await context.addInitScript(({ platform, paneId }) => {
       Object.defineProperty(navigator, "platform", { get: () => platform });
       localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en" }));
-      localStorage.setItem(`herdr-web-ui:view:${paneId}`, "terminal");
     }, { platform, paneId });
     try {
       const page = await context.newPage();

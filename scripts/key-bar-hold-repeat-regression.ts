@@ -7,6 +7,7 @@ import type { KeyBarItem } from "../src/lib/keyBar.ts";
 import { KEY_REPEAT_DELAY_MS, KEY_REPEAT_INTERVAL_MS } from "../src/lib/keyRepeat.ts";
 import panes from "../site/demo/fixtures/panes.json";
 import { buildDemoApp } from "./demo-build.ts";
+import { demoPaneLensKey, lensInitScript } from "./pane-lens.ts";
 
 // Production client over the demo's synthetic transport. The disposable app only listens on
 // loopback; no herdr session, user terminal or real input transport is opened.
@@ -105,9 +106,9 @@ try {
     try {
       const context = await browser.newContext({ viewport: { width: 393, height: 852 }, isMobile: true, hasTouch: true, locale: "en-US" });
       try {
+        await context.addInitScript(lensInitScript({ [demoPaneLensKey(panes.api)]: "terminal" }));
         await context.addInitScript(({ pane, items }) => {
           localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", terminalInputMode: "direct", keyBarItems: items }));
-          localStorage.setItem(`herdr-web-ui:view:${pane}`, "terminal");
         }, { pane: panes.api, items: keyBarItems });
         const page = await context.newPage();
         const errors: string[] = [];
@@ -248,9 +249,9 @@ try {
         userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 27_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0 Mobile/15E148 Safari/604.1",
       });
       try {
+        await iphone.addInitScript(lensInitScript({ [demoPaneLensKey(panes.api)]: "terminal" }));
         await iphone.addInitScript(({ pane }) => {
           localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", terminalInputMode: "direct" }));
-          localStorage.setItem(`herdr-web-ui:view:${pane}`, "terminal");
         }, { pane: panes.api });
         const page = await iphone.newPage();
         const errors: string[] = [];

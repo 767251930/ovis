@@ -9,6 +9,7 @@ import { herdrRpc, herdrSocketPath, sessionSnapshot, workspaceCreate, workspaceC
 import { gjcTranscriptForPane, isGjcProcess } from "../server/gjc-runtime.ts";
 import { UsageService } from "../server/usage.ts";
 import type { ServerMessage, SessionSnapshot } from "../shared/protocol.ts";
+import { lensInitScript, paneLensKey } from "./pane-lens.ts";
 
 type Status = "idle" | "working" | "done" | "blocked";
 type NativeRecord = Readonly<Record<string, unknown>>;
@@ -179,9 +180,9 @@ console.log(JSON.stringify({ type: "broker_response", ok: true, result: {
   await until(() => frames.some((frame) => frame.type === "snapshot"), "initial WebSocket snapshot");
   browser = await chromium.launch({ executablePath: process.env.CHROME_PATH ?? "/opt/google/chrome/chrome", headless: true, args: ["--no-sandbox", "--accept-lang=en-US"] });
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  await context.addInitScript(lensInitScript(Object.fromEntries([paneId, delayedPaneId].map((id) => [paneLensKey(id), "chat"]))));
   await context.addInitScript((ids) => {
     localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en" }));
-    for (const id of ids) localStorage.setItem(`herdr-web-ui:view:${id}`, "chat");
   }, [paneId, delayedPaneId]);
   page = await context.newPage();
   await page.goto(origin);

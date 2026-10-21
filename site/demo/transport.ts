@@ -16,6 +16,7 @@ import type { AgentIntegration, AgentStatus, CommandForm, CommandOutcome, Conver
 import type { RepoDiffFile, RepoDiffFileList, RepoDiffFilePatch, RepoDiffRepository, RepoDiffScope, SessionHistoryAgent, SessionHistoryResponse } from "../../shared/protocol.ts";
 import { VOICE_DEFAULTS, type VoiceStatus } from "../../shared/voice.ts";
 import { isAgentName } from "../../shared/agent-name.ts";
+import { paneStateStorageId } from "../../shared/machines.ts";
 import { skillSyntax } from "../../shared/skill-syntax.ts";
 import { firstMessageFault } from "../../shared/launch-rules.ts";
 import { neighborPane } from "../../src/lib/layoutMap.ts";
@@ -64,6 +65,22 @@ const snapshot = (): SessionSnapshot => local.snapshot!;
 for (const machine of machines) if (machine.snapshot) {
   machine.snapshot.finish_epoch = crypto.randomUUID();
   for (const pane of machine.snapshot.panes) pane.finish_id = pane.agent_status === "done" ? 1 : 0;
+}
+/**
+ * Each PC's herdr lifetime (snapshot `herdr_lifetime`): fictional and the same on every reload, as
+ * a herdr that keeps running is, while the finish epoch above is the bridge's and changes. A
+ * browser check replaces a PC's herdr for its tab by naming another lifetime here, or `null` for
+ * an older bridge that names none (scripts/pane-lifetime-demo-regression.ts).
+ */
+const DEMO_LIFETIMES = "herdr-web-ui-demo:herdr-lifetime";
+{
+  let chosen: Record<string, unknown> = {};
+  try { chosen = JSON.parse(sessionStorage.getItem(DEMO_LIFETIMES) ?? "{}") as Record<string, unknown>; } catch { /* the fixture's own */ }
+  for (const machine of machines) if (machine.snapshot) {
+    const lifetime = chosen[machine.id];
+    if (lifetime === null) delete machine.snapshot.herdr_lifetime;
+    else machine.snapshot.herdr_lifetime = typeof lifetime === "string" ? lifetime : `demo-herdr-${machine.id}`;
+  }
 }
 /** pane id -> fixture key ("api", "web", …) */
 const keyOfPane = new Map<string, string>(Object.entries(panesFixture as Record<string, string>).map(([key, paneId]) => [paneId, key]));
@@ -1882,10 +1899,12 @@ setTimeout(() => {
 // ---- what the demo opens first ------------------------------------------------------------------
 
 // On a desktop the app opens a pane in its terminal, where the demo has only a notice: agent
-// panes open in the chat here unless this browser already chose (the same key the app writes).
+// panes open in the chat here unless this browser already chose (the same key the app writes, the
+// pane in its herdr lifetime). Without a lifetime (an older bridge) the app keeps lenses in the page.
 for (const pane of snapshot().panes) {
-  if (!pane.agent) continue;
-  const key = `herdr-web-ui:view:${pane.pane_id}`;
+  const lifetime = snapshot().herdr_lifetime;
+  if (!pane.agent || lifetime === undefined) continue;
+  const key = `herdr-web-ui:view:${paneStateStorageId(local.id, pane.pane_id, lifetime)}`;
   try { if (window.localStorage.getItem(key) === null) window.localStorage.setItem(key, "chat"); } catch { /* storage blocked: the app falls back to its default */ }
 }
 

@@ -1,4 +1,9 @@
-/** Unsent terminal lines belong to a PC/pane, never to the currently mounted view. */
+import { memoryPaneState } from "./paneState.ts";
+
+/**
+ * Unsent terminal lines belong to a PC/pane in its herdr lifetime (lib/paneState.ts), never to the
+ * currently mounted view. A page-only owner's line stays in memory alone.
+ */
 const listeners = new Set<() => void>();
 const pending = new Map<string, { written: string; canClear: boolean }>();
 export function subscribeTerminalDraft(listener: () => void): () => void { listeners.add(listener); return () => { listeners.delete(listener); }; }
@@ -10,10 +15,12 @@ export function setTerminalDraftSending(owner: string, value: boolean): void {
   notify();
 }
 const memory = new Map<string, string>();
-const PREFIX = "herdr-web-ui:terminal-line:";
+export const TERMINAL_LINE_PREFIX = "herdr-web-ui:terminal-line:";
+const PREFIX = TERMINAL_LINE_PREFIX;
 export const TERMINAL_LINE_LIMIT = 32_768;
 export function readTerminalDraft(owner: string): string {
   if (memory.has(owner)) return memory.get(owner)!;
+  if (memoryPaneState(owner)) return "";
   try { return (localStorage.getItem(PREFIX + owner) ?? "").slice(0, TERMINAL_LINE_LIMIT); } catch { return ""; }
 }
 export function writeTerminalDraft(owner: string, text: string): void {
@@ -21,7 +28,7 @@ export function writeTerminalDraft(owner: string, text: string): void {
   const sent = pending.get(owner);
   if (sent && !value.startsWith(sent.written)) sent.canClear = false;
   memory.set(owner, value);
-  try {
+  if (!memoryPaneState(owner)) try {
     if (value) localStorage.setItem(PREFIX + owner, value);
     else localStorage.removeItem(PREFIX + owner);
   } catch { /* private mode: preserve across view changes in memory */ }

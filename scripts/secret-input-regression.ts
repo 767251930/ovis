@@ -7,6 +7,7 @@ import { chromium, type Browser } from "playwright-core";
 import { createServer } from "../server/index.ts";
 import { paneSendText, workspaceCreate, workspaceClose } from "../server/herdr/client.ts";
 import { chromePath } from "./chrome-path.ts";
+import { lensInitScript, paneLensKey } from "./pane-lens.ts";
 
 /** Only owned no-echo fixtures; assert delivery without storing the entered value. */
 export async function checkSecretInput(browser: Browser, origin: string): Promise<void> {
@@ -30,8 +31,8 @@ process.stdin.on("data", chunk => {
 `);
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   try {
+    await context.addInitScript(lensInitScript({ [paneLensKey(pane)]: "terminal" }));
     await context.addInitScript((pane) => {
-      localStorage.setItem(`herdr-web-ui:view:${pane}`, "terminal");
       const Native = window.WebSocket;
       const sockets = new Set<WebSocket>();
       window.WebSocket = class extends Native {
@@ -122,8 +123,8 @@ process.stdin.on("data", chunk => {
     // size, alone, whether the pane types straight into the grid or through the input line.
     const desktop = await browser.newContext({ viewport: { width: 1280, height: 800 } });
     try {
+      await desktop.addInitScript(lensInitScript({ [paneLensKey(pane)]: "terminal" }));
       await desktop.addInitScript((pane) => {
-        localStorage.setItem(`herdr-web-ui:view:${pane}`, "terminal");
         const Native = window.WebSocket;
         const sockets = new Set<WebSocket>();
         window.WebSocket = class extends Native {

@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import type { Browser } from "playwright-core";
 import { chromePath } from "./chrome-path.ts";
+import { lensInitScript, paneLensKey } from "./pane-lens.ts";
 
 /** Replay Safari replacement edits and assert emitted bytes, commit order and pane isolation. */
 export async function checkSafariIme(browser: Browser, origin: string, pane: string, otherPane: string): Promise<void> {
@@ -9,10 +10,10 @@ export async function checkSafariIme(browser: Browser, origin: string, pane: str
     userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/26.6.2 Safari/605.1.15",
     viewport: { width: 1100, height: 700 },
   });
+  await context.addInitScript(lensInitScript({ [paneLensKey(pane)]: "terminal" }));
   await context.addInitScript((pane) => {
     Object.defineProperty(navigator, "platform", { get: () => "MacIntel" });
     localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", terminalInputMode: "direct" }));
-    localStorage.setItem(`herdr-web-ui:view:${pane}`, "terminal");
   }, pane);
   const page = await context.newPage();
   const sent: Array<{ pane_id: string; text: string }> = [];

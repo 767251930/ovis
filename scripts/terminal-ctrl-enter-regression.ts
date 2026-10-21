@@ -4,6 +4,7 @@ import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFil
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { paneSendKeys, paneSendText } from "../server/herdr/client.ts";
+import { lensInitScript, paneLensKey } from "./pane-lens.ts";
 
 const MODIFIED_CTRL_ENTER = "\x1b[27;5;13~";
 /** how long a send that should not happen gets to show up */
@@ -29,10 +30,10 @@ type Sent = { type: "input"; pane_id: string; text: string } | { type: "keys"; p
  */
 export async function checkCtrlEnter(browser: Browser, origin: string, paneId: string): Promise<void> {
   const context = await browser.newContext({ viewport: { width: 1100, height: 650 } });
+  await context.addInitScript(lensInitScript({ [paneLensKey(paneId)]: "terminal" }));
   await context.addInitScript((id) => {
     Object.defineProperty(navigator, "platform", { get: () => "Linux x86_64" });
     localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en" }));
-    localStorage.setItem(`herdr-web-ui:view:${id}`, "terminal");
   }, paneId);
   const fixture = mkdtempSync(join(tmpdir(), "herdr-ctrl-enter-"));
   const received = join(fixture, "received.txt");

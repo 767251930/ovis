@@ -1372,6 +1372,42 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
 - The browser demo answers `GET /api/sessions/history` with two fictional sessions per agent and
   marks a tab resumed through it as showing that session, so the **Already open** path shows too.
 
+### Recover unsent text (`.draft-recovery`)
+- A pane's unsent state (its message draft, its terminal input line, input held while it was
+  disconnected, and the lens picked for it) is kept per PC, pane **and herdr lifetime**: the
+  snapshot's `herdr_lifetime`, a digest of the daemon's socket identity (or the Windows pid:start
+  marker). A bridge restart keeps it; a herdr that replaced the last one, and reuses its pane IDs
+  for other panes, starts every box and lens empty. A PC whose bridge proves no lifetime (an older
+  bridge, an unreadable socket) keeps what is typed in the page only, never in storage.
+- Nothing kept for a pane the app can no longer prove is the same one is put back by itself. The
+  pane's menu (a right-click on the pane, the **⋯** of a split pane's head, or a phone's tab menu)
+  has **Recover unsent text** (lucide `ArchiveRestore`, before Close pane), which opens a
+  `.modal` listing every such record on this device: earlier lifetimes' and those kept before
+  drafts named their herdr. Each `.draft-recovery-row` says its kind (**Message draft**,
+  **Terminal line**, **Held input**) in `--fs-sm` semibold, its PC and pane, where it comes from,
+  and its first line in mono, cut with an ellipsis; the opening pane's own records come first. A
+  lens is not text and is never listed.
+- A picked row (`aria-pressed`, the accent edge and an inset bar, not colour alone) opens its
+  detail under it: the whole text, inert (control characters as their visible symbols) and
+  selectable, a **Recover into** pair of radios, **Message box** or **Terminal input line**, none
+  picked, and **Discard** beside **Recover**, which stays disabled until a box is picked. Recover
+  copies the text into that box of the pane the dialog was opened from and sends nothing; a box
+  that already holds text asks first, in place (**Replace** or **Cancel**). A record that cannot be
+  read, or is larger than its box ever held, can only be discarded. The record goes with Recover
+  or Discard and no other; a `role="status"` line says what was done.
+- Keyboard: Tab moves through the rows and the detail's controls and stays inside the dialog,
+  Escape closes the confirmation first and then the dialog, and the focus starts on Close. On a
+  touch screen every control is a 44 px target.
+- The design uses Ovis's existing controls only: the pane menu, the modal and its rows, and the
+  message box and terminal input line the text goes back into. It differs from Agent of Empires
+  (AoE), whose web client deletes the drafts of sessions missing from its active set: herdr owns
+  the panes and reuses their IDs after a restart, so a roster cannot tell a gone pane from a
+  reused one, and deleting on it would lose unsent text. Ovis keys drafts by the daemon's proven
+  lifetime instead and leaves anything ambiguous for the user to recover or discard. It claims no
+  other app's recovery policy.
+- The browser demo gives each PC a fictional lifetime that a reload keeps;
+  `scripts/pane-lifetime-demo-regression.ts` replaces it to show a replacement herdr.
+
 ### Changes list and diff viewer (`.repo-changes`, `.repo-diff*`)
 - Files has two faces, **Browse** | **Changes** (`.segmented` in its header). **Changes** lists
   what a comparison changed in the repository the pane sits in: the working tree against the

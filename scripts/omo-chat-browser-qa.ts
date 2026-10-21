@@ -14,6 +14,7 @@ import { createServer } from "../server/index.ts";
 import { herdrRpc, sessionSnapshot, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import { omoPanes, omoSessionFolder } from "../server/omo.ts";
 import { startShellAgent } from "../server/shell-agent.ts";
+import { lensInitScript, paneLensKey } from "./pane-lens.ts";
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "herdr-web-ui-omo-browser-")));
 const launchers = join(root, "launchers");
@@ -189,9 +190,9 @@ try {
   browser = await chromium.launch({ executablePath: process.env["CHROME_PATH"] ?? "/opt/google/chrome/chrome", headless: process.env["HEADED"] !== "1", args: ["--no-sandbox", "--no-proxy-server"] });
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, locale: "en-US" });
   page = await context.newPage();
+  await page.addInitScript(lensInitScript(Object.fromEntries([paneA, paneB, paneL, paneN].map((id) => [paneLensKey(id), "chat"]))));
   await page.addInitScript((ids) => {
     localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en" }));
-    for (const id of ids) localStorage.setItem(`herdr-web-ui:view:${id}`, "chat");
   }, [paneA, paneB, paneL, paneN]);
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));

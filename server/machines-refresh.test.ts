@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Machine } from "../shared/machines.ts";
+import { paneStateStorageId, type Machine } from "../shared/machines.ts";
 import type { ServerMessage, SessionSnapshot } from "../shared/protocol.ts";
 import { CompletionTracker } from "./completion.ts";
 import { bridgeAgentNews, MachineManager } from "./machines.ts";
@@ -194,6 +194,53 @@ describe("machine snapshot refresh races", () => {
     send({ type: "pane-status", pane_id: "fixture:p1", agent_status: "done", finish_id: 4, finish_epoch: "remote-server" });
     expect(await received).toMatchObject({ finish_id: 4, finish_epoch: "remote-server" });
     expect(runtime.machine.snapshot?.panes[0]?.finish_id).toBe(4);
+  });
+
+  it("keeps each PC's herdr lifetime apart through snapshots and status-only events, equal pane IDs included", async () => {
+    const { manager, drive, remote, runtime, send } = await remoteFixture();
+    const statusFrame = (finishEpoch: string) => new Promise<ServerMessage>((resolve, reject) => {
+      const timer = setTimeout(() => { unsubscribe(); reject(new Error("no remote status event")); }, 2000);
+      const unsubscribe = manager.subscribe((event) => {
+        if (event.type === "machine-message" && event.machine_id === "remote" && event.message.type === "pane-status" && event.message.finish_epoch === finishEpoch) {
+          clearTimeout(timer); unsubscribe(); resolve(event.message);
+        }
+      });
+    });
+    const current = snapshot("working");
+    current.finish_epoch = "remote-server";
+    current.herdr_lifetime = "remote-lifetime";
+    remote.set(current);
+    await drive.refresh(runtime);
+    expect(runtime.machine.snapshot?.herdr_lifetime).toBe("remote-lifetime");
+    const localPc = (): Machine => manager.list().find((machine) => machine.id === "local")!;
+    const localLifetime = localPc().snapshot?.herdr_lifetime;
+    // the same pane ID on both PCs: their unsent state never shares a key, even with one lifetime string
+    expect(localPc().snapshot?.panes[0]?.pane_id).toBe(runtime.machine.snapshot?.panes[0]?.pane_id);
+    expect(localLifetime).not.toBe("remote-lifetime");
+    expect(paneStateStorageId("local", "fixture:p1", "remote-lifetime")).not.toBe(paneStateStorageId("remote", "fixture:p1", "remote-lifetime"));
+    // a status-only frame carries no lifetime: the snapshot's own stays, for that PC alone
+    const done = statusFrame("remote-server");
+    send({ type: "pane-status", pane_id: "fixture:p1", agent_status: "done", finish_id: 1, finish_epoch: "remote-server" });
+    await done;
+    expect(runtime.machine.snapshot).toMatchObject({ herdr_lifetime: "remote-lifetime", panes: [{ agent_status: "done" }] });
+    // nor does a bridge restart's new finish epoch invent or drop one
+    const restarted = statusFrame("restarted-bridge");
+    send({ type: "pane-status", pane_id: "fixture:p1", agent_status: "idle", finish_id: 0, finish_epoch: "restarted-bridge" });
+    await restarted;
+    expect(runtime.machine.snapshot).toMatchObject({ finish_epoch: "restarted-bridge", herdr_lifetime: "remote-lifetime", panes: [{ agent_status: "idle" }] });
+    expect(localPc().snapshot?.herdr_lifetime).toBe(localLifetime);
+    // an older bridge's snapshot names none: the PC has no lifetime, rather than keeping a stale one
+    const dropped = new Promise<Machine>((resolve, reject) => {
+      const timer = setTimeout(() => { unsubscribe(); reject(new Error("no snapshot from the older bridge")); }, 2000);
+      const unsubscribe = manager.subscribe((event) => {
+        const pc = event.type === "machines" ? event.machines.find((machine) => machine.id === "remote") : undefined;
+        if (pc?.snapshot && pc.snapshot.finish_epoch === undefined) { clearTimeout(timer); unsubscribe(); resolve(pc); }
+      });
+    });
+    remote.set(snapshot("idle"));
+    await drive.refresh(runtime);
+    expect((await dropped).snapshot?.herdr_lifetime).toBeUndefined();
+    expect(runtime.machine.snapshot?.herdr_lifetime).toBeUndefined();
   });
 
   it("keeps a newer local status and retries the invalidated snapshot", async () => {

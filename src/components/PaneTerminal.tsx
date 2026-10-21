@@ -34,6 +34,7 @@ import { matchHerdrWidths } from "../lib/terminalWidths.ts";
 import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
 import { useSessionHistoryOffered } from "../lib/useSessionHistoryOffered.ts";
 import { paneStorageId } from "../../shared/machines.ts";
+import { composerDraftKey, memoryPaneState, paneStateOwner, usePaneLifetimes } from "../lib/paneState.ts";
 import { KeyBar } from "./KeyBar.tsx";
 import { TerminalInput } from "./TerminalInput.tsx";
 import { FindBar } from "./FindBar.tsx";
@@ -216,6 +217,12 @@ export function PaneTerminal({
   const openWebPage = useContext(WebPanelContext);
   const machineId = useMachineId();
   const commands = usePaneCommands(paneId, agent);
+  // whose this pane's drafts and held input are: the PC, the pane and the herdr it lives in
+  // (lib/paneState.ts). A herdr that replaced the last one reuses pane IDs for other panes
+  const paneLifetime = usePaneLifetimes().get(machineId);
+  const lifetimeRef = useRef(paneLifetime);
+  lifetimeRef.current = paneLifetime;
+  const stateOwner = paneId === null ? null : paneStateOwner(machineId, paneId, paneLifetime);
   const openWebRef = useRef((uri: string, shiftKey: boolean) => openWebPage?.(uri, shiftKey, machineId) ?? false);
   openWebRef.current = (uri, shiftKey) => openWebPage?.(uri, shiftKey, machineId) ?? false;
   const branchWord = usePaneBranch(machineId, workspaceId);
@@ -414,7 +421,8 @@ export function PaneTerminal({
   inputLineRef.current = inputLine;
   // input typed while disconnected, held for the user to review and send
   const [draftState, setDraftState] = useState<{ owner: string | null; value: InputDraft }>({ owner: null, value: EMPTY_DRAFT });
-  const draft = draftState.value;
+  // another owner's draft (the herdr behind the pane ID changed) is not this pane's, from this render on
+  const draft = draftState.owner === stateOwner ? draftState.value : EMPTY_DRAFT;
   // a message's "Rewind in terminal" (Claude Code, grok, agy): which pane's terminal says to run the agent's own
   // rewind, until dismissed or the chat is back. Nothing is typed for it: a draft stays as it was
   const [rewindHint, setRewindHint] = useState<string | null>(null);
@@ -436,7 +444,7 @@ export function PaneTerminal({
     onOpenTerminal?.();
   }, [onOpenTerminal]);
   const setDraft = useCallback((value: InputDraft | ((previous: InputDraft) => InputDraft)) => {
-    const owner = paneRef.current ? paneStorageId(machineId, paneRef.current) : null;
+    const owner = paneRef.current ? paneStateOwner(machineId, paneRef.current, lifetimeRef.current) : null;
     setDraftState((previous) => ({ owner, value: typeof value === "function" ? value(previous.owner === owner ? previous.value : EMPTY_DRAFT) : value }));
   }, [machineId]);
   const draftPaneRef = useRef<string | null>(null);
@@ -444,12 +452,20 @@ export function PaneTerminal({
   // reach the pty without the start the draft holds (`echo ` held, `rm -rf build` and Enter typed).
   // Set here on each render, and at once by onData when it holds a key, before that render comes.
   const draftHeldForRef = useRef<string | null>(null);
-  draftHeldForRef.current = paneId !== null && draftState.owner === paneStorageId(machineId, paneId) && !draftIsEmpty(draft) ? paneId : null;
+  draftHeldForRef.current = paneId !== null && draftState.owner === stateOwner && !draftIsEmpty(draft) ? paneId : null;
   useEffect(() => {
-    if (!paneId || draftState.owner !== paneStorageId(machineId, paneId)) return;
+    if (!paneId || stateOwner === null || draftState.owner !== stateOwner || memoryPaneState(stateOwner)) return;
     const key = `herdr-web-ui:terminal-draft:${draftState.owner}`;
     try { if (draftIsEmpty(draft)) localStorage.removeItem(key); else localStorage.setItem(key, JSON.stringify({ ...draft, at: Date.now() })); } catch {}
-  }, [draftState, paneId, machineId, draft]);
+  }, [draftState, paneId, stateOwner, draft]);
+  // the same pane ID in another herdr lifetime: what that lifetime holds, never the last one's
+  // (which stays stored, for Recover unsent text). The pane change below restores its own
+  useLayoutEffect(() => {
+    if (stateOwner === null || draftPaneRef.current !== paneId || draftState.owner === null || draftState.owner === stateOwner) return;
+    let saved = EMPTY_DRAFT;
+    try { if (!memoryPaneState(stateOwner)) saved = restoreDraft(localStorage.getItem(`herdr-web-ui:terminal-draft:${stateOwner}`), Date.now()); } catch {}
+    setDraftState({ owner: stateOwner, value: saved });
+  }, [stateOwner, paneId, draftState.owner]);
   // transient OSC 52 feedback ("copied") — a pill in the banner column
   const [clipboardNote, setClipboardNote] = useState<string | null>(null);
   const clipboardTimerRef = useRef<number | null>(null);
@@ -2311,7 +2327,8 @@ export function PaneTerminal({
     // a record past its TTL, an undated one, and a hand-edited one all restore as nothing held
     let saved = EMPTY_DRAFT;
     try {
-      saved = paneId ? restoreDraft(localStorage.getItem(`herdr-web-ui:terminal-draft:${paneStorageId(machineId, paneId)}`), Date.now()) : EMPTY_DRAFT;
+      const owner = paneId ? paneStateOwner(machineId, paneId, lifetimeRef.current) : null;
+      saved = owner && !memoryPaneState(owner) ? restoreDraft(localStorage.getItem(`herdr-web-ui:terminal-draft:${owner}`), Date.now()) : EMPTY_DRAFT;
     } catch {}
     setDraft(saved);
     draftPaneRef.current = paneId;
@@ -3026,7 +3043,7 @@ export function PaneTerminal({
             onClick={() => {
               const block = formatTerminalQuote({ label: title?.trim() || paneId, range: selectionQuote.range, text: selectionQuote.text });
               if (block === null) return;
-              const key = `herdr-web-ui:composer-draft:${paneStorageId(machineId, paneId)}`;
+              const key = composerDraftKey(paneStateOwner(machineId, paneId, paneLifetime));
               const next = appendQuote(composerDrafts.read(key).text, block, MAX_COMPOSER_CHARS);
               if (next === null) { noteClipboard(t("Too long for the message draft")); return; }
               composerDrafts.set(key, next);
@@ -3242,7 +3259,7 @@ export function PaneTerminal({
           slot in the chat lens too (a box-less slot there, TerminalInput.css), so switching lenses
           keeps it mounted: a remount would drop what was typed and a send still on its way */}
       {((!chatView && lineSlot) || secretInput) && <div ref={setInputSlot} className={`terminal-input-slot${!chatView && lineSlot ? "" : " is-empty"}`}>
-        {secretInput ?? (!chatView && lineSlot && !secretActive && <TerminalInput key={paneId} active={active} owner={paneStorageId(machineId, paneId)} onComposing={setLineComposing} connected={connected && !held} onSend={sendTerminalLine} onEnter={pressEnter} onFocus={reassertGrid} />)}
+        {secretInput ?? (!chatView && lineSlot && !secretActive && <TerminalInput key={stateOwner} active={active} owner={stateOwner!} onComposing={setLineComposing} connected={connected && !held} onSend={sendTerminalLine} onEnter={pressEnter} onFocus={reassertGrid} />)}
       </div>}
       {presented && paneId !== null && !secretActive && !observing && !chatView && <KeyBar disabled={composing || !connected || !inputReady || held || ended} onKey={pressKey}
         holdScope={`${paneStorageId(machineId, paneId)}:${view}`}

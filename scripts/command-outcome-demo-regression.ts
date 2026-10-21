@@ -7,6 +7,7 @@ import { appFaces } from "./app-faces.ts";
 import panes from "../site/demo/fixtures/panes.json";
 import { buildDemoApp } from "./demo-build.ts";
 import { chromePath } from "./chrome-path.ts";
+import { demoPaneLensKey, lensInitScript } from "./pane-lens.ts";
 
 // What became of a command sent from Chat, on the unmodified app over the demo's fixture transport
 // (site/demo/transport.ts tracks each send as the bridge would): the chip under the sent bubble
@@ -73,9 +74,9 @@ try {
     const touch = width <= 480;
     const context = await browser.newContext({ viewport: { width, height: touch ? 844 : 800 }, hasTouch: touch, isMobile: touch, colorScheme: scheme, locale: "en-US" });
     try {
+      await context.addInitScript(lensInitScript(Object.fromEntries(["w1H:p1", "w1D:p1", "w1K:p1"].map((pane) => [demoPaneLensKey(pane), "chat"]))));
       await context.addInitScript((theme) => {
         localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", theme }));
-        for (const pane of ["w1H:p1", "w1D:p1", "w1K:p1"]) localStorage.setItem(`herdr-web-ui:view:${pane}`, "chat");
       }, scheme);
       const page = await context.newPage();
       const errors: string[] = [];

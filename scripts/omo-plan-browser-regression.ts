@@ -13,6 +13,7 @@ import { omoSessionFolder } from "../server/omo.ts";
 import { startShellAgent } from "../server/shell-agent.ts";
 import { UsageService } from "../server/usage.ts";
 import type { HerdrPane, ServerMessage } from "../shared/protocol.ts";
+import { lensInitScript, paneLensKey } from "./pane-lens.ts";
 
 const root = mkdtempSync(join(tmpdir(), "omo-plan-browser-"));
 const evidence = process.env.UI_EVIDENCE_DIR ?? join(root, "evidence");
@@ -89,9 +90,9 @@ try {
     for (const theme of ["dark", "light"] as const) {
       const context = await browser.newContext({ viewport: { width, height: 844 }, isMobile: width === 390, hasTouch: width === 390, colorScheme: theme, locale: "en-US" });
       try {
+        await context.addInitScript(lensInitScript({ [paneLensKey(paneId)]: "chat" }));
         await context.addInitScript(({ paneId, theme }) => {
           localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", theme }));
-          localStorage.setItem(`herdr-web-ui:view:${paneId}`, "chat");
         }, { paneId, theme });
         const page = await context.newPage();
         page.setDefaultTimeout(20_000);

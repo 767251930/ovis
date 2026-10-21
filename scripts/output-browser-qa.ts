@@ -11,6 +11,7 @@ import { chromium } from "playwright-core";
 import { createServer } from "../server/index.ts";
 import { herdrRpc, paneSendText, paneSendKeys } from "../server/herdr/client.ts";
 import { chromePath } from "./chrome-path.ts";
+import { lensInitScript, paneLensKey } from "./pane-lens.ts";
 
 const root = mkdtempSync(join(tmpdir(), "herdr-output-browser-"));
 const workspaces: string[] = [];
@@ -37,8 +38,8 @@ try {
   server = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: join(root, "push") });
   browser = await chromium.launch({ executablePath: chromePath(), headless: true, args: ["--no-sandbox"] });
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, locale: "en-US" });
+  await context.addInitScript(lensInitScript(Object.fromEntries(panes.map((id) => [paneLensKey(id), "terminal"]))));
   await context.addInitScript((ids) => {
-    for (const id of ids) localStorage.setItem(`herdr-web-ui:view:${id}`, "terminal");
     const page = window as unknown as { fakeHidden?: boolean };
     Object.defineProperty(Document.prototype, "visibilityState", { configurable: true, get: () => (page.fakeHidden ? "hidden" : "visible") });
     Object.defineProperty(Document.prototype, "hidden", { configurable: true, get: () => page.fakeHidden === true });

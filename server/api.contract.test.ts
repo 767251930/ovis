@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { ConversationMonitor } from "./conversation-monitor.ts";
 import { createServer } from "./index.ts";
+import { finishHerdrIdentity, herdrLifetime } from "./finishes.ts";
 import type { AgentKind, AgentStatus, ApiError, HealthAuth, IntegrationsResponse, LanExposure, PortalStatus, PushKey, RemoteAccess, SessionSnapshot, TabMoved, PaneFindResponse, PaneReadResult, UsageReport, WorkspaceCreated, WorktreeListing, WorktreeOpened, WorktreeRemoved } from "../shared/protocol.ts";
 import { SUPPORTED_AGENT_KINDS } from "../shared/supported-agents.ts";
 import { HerdrUpdater } from "./herdr-update.ts";
@@ -1685,6 +1686,66 @@ describe("GET /api/session", () => {
     expect(typeof body.snapshot.finish_epoch).toBe("string");
     expect(body.snapshot.finish_epoch?.length).toBeGreaterThan(0);
     expect(body.snapshot.panes.every((pane) => Number.isSafeInteger(pane.finish_id))).toBe(true);
+  });
+});
+
+describe("herdr_lifetime on snapshots", () => {
+  it("names the isolated herdr's lifetime the same on every read, as an opaque digest", async () => {
+    const read = async () => ((await (await fetch(`${base()}/api/session`)).json()) as { snapshot: SessionSnapshot }).snapshot;
+    const first = await read();
+    expect(first.herdr_lifetime).toMatch(/^[0-9a-f]{32}$/);
+    expect((await read()).herdr_lifetime).toBe(first.herdr_lifetime);
+    expect(first.herdr_lifetime).toBe(herdrLifetime(finishHerdrIdentity()!));
+  });
+
+  it("keeps one lifetime per proven daemon, a new one on replacement, none while unproven, and adds only that field", async () => {
+    const root = mkdtempSync(join(tmpdir(), "herdr-lifetime-contract-"));
+    let identity: string | null = "contract-daemon-a";
+    const app = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: join(root, "state"), herdrIdentity: () => identity });
+    const origin = `http://127.0.0.1:${app.port}`;
+    const read = async () => ((await (await fetch(`${origin}/api/session`)).json()) as { snapshot: SessionSnapshot }).snapshot;
+    const socketSnapshot = async (): Promise<SessionSnapshot> => {
+      const ws = new WebSocket(`ws://127.0.0.1:${app.port}/ws`);
+      try {
+        return await new Promise<SessionSnapshot>((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error("no snapshot frame")), 5000);
+          ws.addEventListener("message", (event) => {
+            const message = JSON.parse(String(event.data)) as { type: string; snapshot?: SessionSnapshot };
+            if (message.type === "snapshot" && message.snapshot) { clearTimeout(timer); resolve(message.snapshot); }
+          });
+        });
+      } finally { ws.close(); }
+    };
+    try {
+      // stable: the same daemon on every read, HTTP and the socket's snapshot alike
+      const stable = await read();
+      expect(stable.herdr_lifetime).toMatch(/^[0-9a-f]{32}$/);
+      expect((await read()).herdr_lifetime).toBe(stable.herdr_lifetime);
+      expect((await socketSnapshot()).herdr_lifetime).toBe(stable.herdr_lifetime);
+      // additive: an older client finds every field it knew, herdr's own snapshot plus the finish fields
+      const raw = await sessionSnapshot();
+      expect(Object.keys(stable).filter((key) => key !== "herdr_lifetime").sort()).toEqual([...Object.keys(raw), "finish_epoch"].sort());
+      expect(stable.panes.every((pane) => Number.isSafeInteger(pane.finish_id))).toBe(true);
+      // changed: a replaced herdr is a new lifetime, and a new finish epoch with it
+      identity = "contract-daemon-b";
+      const replaced = await read();
+      expect(replaced.herdr_lifetime).toMatch(/^[0-9a-f]{32}$/);
+      expect(replaced.herdr_lifetime).not.toBe(stable.herdr_lifetime);
+      expect(replaced.finish_epoch).not.toBe(stable.finish_epoch);
+      expect((await socketSnapshot()).herdr_lifetime).toBe(replaced.herdr_lifetime);
+      // unknown: an identity that cannot be read names no lifetime and proves no restart
+      identity = null;
+      const unknown = await read();
+      expect("herdr_lifetime" in unknown).toBe(false);
+      expect(unknown.finish_epoch).toBe(replaced.finish_epoch);
+      expect("herdr_lifetime" in await socketSnapshot()).toBe(false);
+      // the same daemon readable again: its lifetime is back, unchanged
+      identity = "contract-daemon-b";
+      expect((await read()).herdr_lifetime).toBe(replaced.herdr_lifetime);
+    } finally {
+      app.stop();
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

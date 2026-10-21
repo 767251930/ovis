@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import type { Browser } from "playwright-core";
 import { openSettingsPage } from "./settings-page.ts";
 import { chromePath } from "./chrome-path.ts";
+import { lensInitScript, paneLensKey } from "./pane-lens.ts";
 
 export async function checkTerminalInput(browser: Browser, origin: string, pane: string, otherPane: string): Promise<void> {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
@@ -603,9 +604,9 @@ async function checkKeyBarWhileLineComposes(browser: Browser, origin: string, pa
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   page.setDefaultTimeout(10_000);
+  await context.addInitScript(lensInitScript({ [paneLensKey(pane)]: "terminal" }));
   await context.addInitScript((pane) => {
     localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", terminalInputMode: "line" }));
-    localStorage.setItem(`herdr-web-ui:view:${pane}`, "terminal");
   }, pane);
   const frames: any[] = [];
   await page.routeWebSocket(/\/ws(?:\?|$)/, (socket) => {

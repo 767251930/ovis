@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import type { AgentStatus, HerdrPane, SessionSnapshot } from "../shared/protocol.ts";
 import type { CompletionTracker } from "./completion.ts";
@@ -16,6 +17,15 @@ export function finishHerdrIdentity(path = herdrSocketPath(), platform = process
   } catch { return null; }
 }
 
+/**
+ * The snapshot's `herdr_lifetime`: a digest of the daemon identity above, never the per-bridge
+ * finish epoch, so it holds across bridge restarts and changes only with herdr itself. Opaque: the
+ * socket's inode or a Windows pid never reaches a browser.
+ */
+export function herdrLifetime(identity: string): string {
+  return createHash("sha256").update(`herdr-lifetime:v1:${identity}`).digest("hex").slice(0, 32);
+}
+
 /** Only final client-visible statuses enter here, never raw herdr statuses or activity counters. */
 export class Finishes {
   private generation = crypto.randomUUID();
@@ -25,6 +35,9 @@ export class Finishes {
   constructor(private readonly herdr: () => string | null = finishHerdrIdentity) {
     this.identity = herdr();
   }
+
+  /** herdr's identity as read now, or null when it cannot be read (which proves nothing). */
+  herdrIdentity(): string | null { return this.herdr(); }
 
   get epoch(): string {
     const identity = this.herdr();

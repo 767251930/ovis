@@ -20,7 +20,7 @@ import type { AgentStatus, ClientRole, ConversationMetadata, PlanSummary, SlashC
 import { skillSyntax } from "../../shared/skill-syntax.ts";
 import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
 import { composerDrafts } from "../lib/composerDraft.ts";
-import { paneStorageId } from "../../shared/machines.ts";
+import { composerDraftKey, usePaneStateOwner } from "../lib/paneState.ts";
 import {
   agentDisplayLabel,
   atSkillCommands,
@@ -285,7 +285,8 @@ export function Composer({
   const attachmentsRef = useRef<Attachment[]>([]);
   const removedAttachments = useRef(new Set<number>());
   const fileRequest = useRef(0);
-  const draftKey = `herdr-web-ui:composer-draft:${paneStorageId(machineId, paneId)}`;
+  // the pane in the herdr it lives in (lib/paneState.ts): a reused pane ID is not this draft's
+  const draftKey = composerDraftKey(usePaneStateOwner(machineId, paneId));
   const { text, sending } = useSyncExternalStore(composerDrafts.subscribe, () => composerDrafts.read(draftKey));
   const setText = useCallback((value: string | ((previous: string) => string)) => composerDrafts.set(draftKey, value), [draftKey]);
   const mounted = useRef(true);

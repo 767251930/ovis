@@ -8,6 +8,7 @@ import { chromium, type Browser, type Page } from "playwright-core";
 import { createServer } from "../server/index.ts";
 import { workspaceCreate, workspaceClose, paneSendText, paneSendKeys, paneRead } from "../server/herdr/client.ts";
 import { chromePath } from "./chrome-path.ts";
+import { lensInitScript, paneLensKey } from "./pane-lens.ts";
 
 const root = mkdtempSync(join(tmpdir(), "herdr-arrows-clicks-"));
 const owned: string[] = [];
@@ -51,9 +52,9 @@ async function open(browser: Browser, server: ReturnType<typeof createServer>, n
   await paneSendKeys(pane, ["Enter"]);
   await until(async () => (await paneRead({ paneId: pane, source: "visible" })).text.includes("PROBE READY plain"), `${name}: raw probe ready`);
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  await context.addInitScript(lensInitScript({ [paneLensKey(pane)]: "terminal" }));
   await context.addInitScript(({ pane }) => {
     localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en" }));
-    localStorage.setItem(`herdr-web-ui:view:${pane}`, "terminal");
   }, { pane });
   const page = await context.newPage();
   page.on("pageerror", (error) => errors.push(`${name}: ${error.message}`));

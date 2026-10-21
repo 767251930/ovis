@@ -1,5 +1,8 @@
 import { expect, it, setSystemTime } from "bun:test";
 import { ComposerDraftStore, SEND_LEASE_MS, storageEventDraft } from "./composerDraft.ts";
+import { DRAFT_TTL_MS } from "./draft.ts";
+import { discardDraft, recoverableDrafts, recoverDraft, type RecoveryStores } from "./draftRecovery.ts";
+import { composerDraftKey, memoryPaneState, paneStateOwner } from "./paneState.ts";
 function fixture() {
   const data = new Map<string, string>();
   const storage = { getItem: (key: string) => data.get(key) ?? null, setItem: (key: string, value: string) => { data.set(key, value); }, removeItem: (key: string) => { data.delete(key); } };
@@ -154,4 +157,105 @@ it("lets a tab send again once another tab's abandoned lease runs out, and tells
   } finally {
     setSystemTime();
   }
+});
+
+/** A whole device: storage that lists its keys, the composer store and the terminal lines over it. */
+function device() {
+  const data = new Map<string, string>();
+  const storage = {
+    get length() { return data.size; },
+    key: (index: number) => [...data.keys()][index] ?? null,
+    getItem: (key: string) => data.get(key) ?? null,
+    setItem: (key: string, value: string) => { data.set(key, value); },
+    removeItem: (key: string) => { data.delete(key); },
+  };
+  const store = new ComposerDraftStore(() => storage);
+  const lines = new Map<string, string>();
+  const stores: RecoveryStores = {
+    storage: () => storage, composer: store,
+    line: { read: (owner) => lines.get(owner) ?? data.get(`herdr-web-ui:terminal-line:${owner}`) ?? "", write: (owner, text) => {
+      lines.set(owner, text);
+      if (text) data.set(`herdr-web-ui:terminal-line:${owner}`, text); else data.delete(`herdr-web-ui:terminal-line:${owner}`);
+    } },
+  };
+  return { data, storage, store, stores, lines };
+}
+it("proven herdr replacement isolates a reused pane id", () => {
+  const { data, storage, store } = device();
+  const a = composerDraftKey(paneStateOwner("local", "w1:p1", "lifetime-a"));
+  const b = composerDraftKey(paneStateOwner("local", "w1:p1", "lifetime-b"));
+  store.set(a, "typed for the pane of herdr A");
+  // herdr B reuses the pane ID: its box starts empty, and what it gets never touches A's
+  expect(store.read(b)).toEqual({ text: "", sending: false });
+  store.set(b, "typed for B");
+  expect(data.get(a)).toBe("typed for the pane of herdr A");
+  // another PC with the same pane ID and even the same lifetime string is its own owner
+  expect(store.read(composerDraftKey(paneStateOwner("laptop", "w1:p1", "lifetime-a"))).text).toBe("");
+  // A's text is listed for recovery once B is current, B's is not
+  const listed = recoverableDrafts(storage, new Map([["local", "lifetime-b"]]), Date.now());
+  expect(listed.map((record) => [record.key, record.origin, record.text])).toEqual([[a, "earlier", "typed for the pane of herdr A"]]);
+});
+it("unknown lifetime never hydrates a bare-pane draft", () => {
+  const { data, storage, store } = device();
+  data.set("herdr-web-ui:composer-draft:w1:p1", "typed before drafts named their herdr");
+  data.set("herdr-web-ui:composer-draft:remote:laptop:w1%3Ap1", "a remote PC's, from then");
+  const owner = paneStateOwner("local", "w1:p1", undefined);
+  expect(memoryPaneState(owner)).toBe(true);
+  // the same page-only owner across the connection's reconnects, never the bare key's
+  expect(paneStateOwner("local", "w1:p1", undefined)).toBe(owner);
+  expect(store.read(composerDraftKey(owner)).text).toBe("");
+  store.set(composerDraftKey(owner), "typed while the herdr is unproven");
+  expect(store.begin(composerDraftKey(owner), "typed while the herdr is unproven")).toBe(true);
+  store.end(composerDraftKey(owner));
+  expect(store.read(composerDraftKey(owner)).text).toBe("typed while the herdr is unproven");
+  // nothing of the page-only owner reached storage, and the legacy records are still there for recovery
+  expect([...data.keys()].sort()).toEqual(["herdr-web-ui:composer-draft:remote:laptop:w1%3Ap1", "herdr-web-ui:composer-draft:w1:p1"]);
+  expect(recoverableDrafts(storage, new Map(), Date.now()).map((record) => [record.machine_id, record.pane_id, record.origin]))
+    .toEqual([["laptop", "w1:p1", "legacy"], ["local", "w1:p1", "legacy"]]);
+});
+it("recovery requires explicit destination choice", () => {
+  const { data, storage, store, stores } = device();
+  const now = Date.now();
+  const current = paneStateOwner("local", "w1:p1", "lifetime-b");
+  data.set(composerDraftKey(paneStateOwner("local", "w1:p1", "lifetime-a")), "git push --force-with-lease");
+  data.set(`herdr-web-ui:terminal-line:${paneStateOwner("local", "w1:p2", "lifetime-a")}`, "make test");
+  data.set(`herdr-web-ui:terminal-draft:${paneStateOwner("local", "w1:p3", "lifetime-a")}`, JSON.stringify({ text: "echo \u001b[31mred\u0007", truncated: false, leftOut: false, at: now }));
+  data.set(`herdr-web-ui:terminal-draft:${paneStateOwner("local", "w1:p4", "lifetime-a")}`, "{not json");
+  data.set(`herdr-web-ui:terminal-draft:${paneStateOwner("local", "w1:p5", "lifetime-a")}`, JSON.stringify({ text: "expired", at: now - DRAFT_TTL_MS - 1 }));
+  data.set(`herdr-web-ui:terminal-line:${paneStateOwner("local", "w1:p6", "lifetime-a")}`, "x".repeat(40_000));
+  data.set("herdr-web-ui:view:w1:p1", "chat");
+  const lifetimes = new Map([["local", "lifetime-b"]]);
+  const listed = recoverableDrafts(storage, lifetimes, now, { machine_id: "local", pane_id: "w1:p1" });
+  // an expired held draft keeps its expiry, a lens is not text: neither is listed
+  expect(listed.map((record) => [record.pane_id, record.source, record.problem])).toEqual([
+    ["w1:p1", "message", null], ["w1:p2", "line", null], ["w1:p3", "held", null], ["w1:p4", "held", "unreadable"], ["w1:p6", "line", "too_large"],
+  ]);
+  // held control bytes are inert text, never keys
+  expect(listed[2]!.text).toBe("echo \u241b[31mred\u2407");
+  expect(recoverDraft(listed[3]!, "message", current, false, stores)).toBe("unreadable");
+  expect(recoverDraft(listed[4]!, "line", current, false, stores)).toBe("unreadable");
+  // nothing happens before a box is picked
+  expect(recoverDraft(listed[0]!, null, current, false, stores)).toBe("choose_destination");
+  expect(store.read(composerDraftKey(current)).text).toBe("");
+  expect(data.has(listed[0]!.key)).toBe(true);
+  // an empty box takes the exact text; the record it came from goes, no other
+  expect(recoverDraft(listed[0]!, "message", current, false, stores)).toBe("recovered");
+  expect(store.read(composerDraftKey(current))).toEqual({ text: "git push --force-with-lease", sending: false });
+  expect(data.has(listed[0]!.key)).toBe(false);
+  expect(data.has(listed[1]!.key)).toBe(true);
+  // a box holding text is replaced only on the second, explicit choice
+  expect(recoverDraft(listed[1]!, "message", current, false, stores)).toBe("confirm_replace");
+  expect(store.read(composerDraftKey(current)).text).toBe("git push --force-with-lease");
+  expect(data.has(listed[1]!.key)).toBe(true);
+  expect(recoverDraft(listed[1]!, "line", current, false, stores)).toBe("recovered");
+  expect(stores.line.read(current)).toBe("make test");
+  expect(recoverDraft(listed[2]!, "line", current, false, stores)).toBe("confirm_replace");
+  expect(recoverDraft(listed[2]!, "line", current, true, stores)).toBe("recovered");
+  expect(stores.line.read(current)).toBe("echo \u241b[31mred\u2407");
+  // Discard removes the one record picked
+  const rest = recoverableDrafts(storage, lifetimes, now);
+  expect(rest.map((record) => record.pane_id)).toEqual(["w1:p4", "w1:p6"]);
+  discardDraft(rest[0]!, stores);
+  expect(recoverableDrafts(storage, lifetimes, now).map((record) => record.pane_id)).toEqual(["w1:p6"]);
+  expect(data.get("herdr-web-ui:view:w1:p1")).toBe("chat");
 });

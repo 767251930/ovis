@@ -8,6 +8,7 @@ import type { PaneFindResponse } from "../shared/protocol.ts";
 import { createServer } from "../server/index.ts";
 import { herdrRpc, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import { chromePath } from "./chrome-path.ts";
+import { lensInitScript, paneLensKey } from "./pane-lens.ts";
 
 /** GUI searches stay in herdr's history, never in browser scrollback or terminal input. */
 export async function checkPaneFind(browser: Browser, origin: string): Promise<void> {
@@ -25,8 +26,8 @@ export async function checkPaneFind(browser: Browser, origin: string): Promise<v
       keys: ["enter"],
     });
     await ready;
+    await context.addInitScript(lensInitScript({ [paneLensKey(pane)]: "terminal" }));
     await context.addInitScript((id) => {
-      localStorage.setItem(`herdr-web-ui:view:${id}`, "terminal");
       localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ theme: "system" }));
     }, pane);
     const page = await context.newPage();

@@ -4,14 +4,15 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { paneRead, paneSendKeys, paneSendText } from "../server/herdr/client.ts";
+import { lensInitScript, paneLensKey } from "./pane-lens.ts";
 
 /** Mac keyboard events in an isolated context, against a pane owned by the UI suite. */
 export async function checkCommandBackspace(browser: Browser, origin: string, paneId: string): Promise<void> {
   const context = await browser.newContext({ viewport: { width: 1100, height: 650 } });
+  await context.addInitScript(lensInitScript({ [paneLensKey(paneId)]: "terminal" }));
   await context.addInitScript((id) => {
     Object.defineProperty(navigator, "platform", { get: () => "MacIntel" });
     localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en" }));
-    localStorage.setItem(`herdr-web-ui:view:${id}`, "terminal");
   }, paneId);
   try {
     const page = await context.newPage();
@@ -112,9 +113,9 @@ process.stdin.on("data", (data) => {
     await context.close();
   }
   const nonMac = await browser.newContext();
+  await nonMac.addInitScript(lensInitScript({ [paneLensKey(paneId)]: "terminal" }));
   await nonMac.addInitScript((id) => {
     Object.defineProperty(navigator, "platform", { get: () => "Linux x86_64" });
-    localStorage.setItem(`herdr-web-ui:view:${id}`, "terminal");
   }, paneId);
   try {
     const page = await nonMac.newPage();

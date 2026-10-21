@@ -12,6 +12,7 @@ import { DEFAULT_KEY_BAR_ITEMS, migrateKeyBarItems } from "./keyBar.ts";
 import { SHARED_SETTING_KEYS } from "../../shared/preferences.ts";
 import { NOTICE_VERSION, TELEMETRY_SETTINGS_KEYS, TELEMETRY_THEME_SIDE_KEYS, telemetrySettings } from "../../shared/telemetry.ts";
 import { SETTING_SCOPE, telemetrySettingsSnapshot, alertPrefs, CHAT_FONT_MAX, CHAT_FONT_MIN, CHAT_LANE_MAX_REM, CHAT_LANE_MIN, CHAT_WIDTHS, chatFontSize, chatLaneLength, chatLaneWidth, DEFAULT_SETTINGS, MARKDOWN_WIDTHS, QUICK_REPLIES_MAX, QUICK_REPLY_MAX_CHARS, quickReplyButtons, sanitizeSettings, terminalTheme, forgetPaneViews, DICTATION_LANGUAGES, VOICE_BUTTONS, wantsVoiceInput } from "./settings.ts";
+import { paneStateOwner } from "./paneState.ts";
 import { applyToDocument, loadSettings, saveSettings } from "./settings.ts";
 import { sanitizeSettings as oldSanitizeSettings, saveSettings as oldSaveSettings } from "./settings.legacy-fixture.ts";
 import { themeFor } from "./themeFor.ts";
@@ -959,6 +960,14 @@ describe("default lens", () => {
     const storage = { get length() { return data.size; }, key: (i: number) => [...data.keys()][i] ?? null, removeItem: (k: string) => { data.delete(k); } };
     expect(forgetPaneViews(storage)).toBe(2);
     expect([...data.keys()]).toEqual(["herdr-web-ui:settings"]);
+  });
+  it("forgets the lenses kept per herdr lifetime as well, and no draft", () => {
+    const lens = `herdr-web-ui:view:${paneStateOwner("local", "w1:p1", "lifetime-a")}`;
+    const draft = `herdr-web-ui:composer-draft:${paneStateOwner("local", "w1:p1", "lifetime-a")}`;
+    const data = new Map<string, string>([[lens, "chat"], [draft, "unsent"]]);
+    const storage = { get length() { return data.size; }, key: (i: number) => [...data.keys()][i] ?? null, removeItem: (k: string) => { data.delete(k); } };
+    expect(forgetPaneViews(storage)).toBe(1);
+    expect([...data.keys()]).toEqual([draft]);
   });
 });
 

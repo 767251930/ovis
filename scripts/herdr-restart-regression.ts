@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { chromium, type Browser, type WebSocket as BrowserSocket } from "playwright-core";
 import type { ServerMessage } from "../shared/protocol.ts";
 import { chromePath } from "./chrome-path.ts";
+import { lensInitScript, paneLensKey } from "./pane-lens.ts";
 
 // This script stops its herdr, so it must not share even the browser lane's test session.
 const root = mkdtempSync(join(tmpdir(), "herdr-restart-"));
@@ -79,9 +80,9 @@ try {
   server = createServer({ hostname: "127.0.0.1", port: 0, stateDir: join(root, "web"), token: "" });
   browser = await chromium.launch({ executablePath: chromePath(), headless: true });
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  await page.addInitScript(lensInitScript({ [paneLensKey(pane)]: "terminal" }));
   await page.addInitScript(({ pane }) => {
     localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en" }));
-    localStorage.setItem(`herdr-web-ui:view:${pane}`, "terminal");
   }, { pane });
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));

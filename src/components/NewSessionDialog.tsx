@@ -18,7 +18,7 @@ import { MAX_COMPOSER_CHARS } from "../lib/compose.ts";
 import { createRequest, firstMessageOutcome, newSessionLaunch, startNewSession } from "../lib/newSession.ts";
 import { useMachineSessions } from "../lib/machineSessionContext.tsx";
 import { composerDrafts } from "../lib/composerDraft.ts";
-import { paneStorageId } from "../../shared/machines.ts";
+import { composerDraftKey, paneStateOwner, usePaneLifetimes } from "../lib/paneState.ts";
 import { inFlightGuard } from "../lib/sessionHistory.ts";
 import { userErrorMessage, type UserError } from "../lib/userError.ts";
 import { nativeModalOver, useFocusTrap } from "../lib/useFocusTrap.ts";
@@ -94,6 +94,7 @@ export function NewSessionDialog({ open, defaultCwd, tab = null, onClose, onCrea
   const t = useT();
   const { settings } = useSettings();
   const machineId = useMachineId();
+  const lifetimes = usePaneLifetimes();
   const { createTab, createWorkspace, fetchAgentKinds, fetchAgentCommands } = useMachineApi();
   const machineSessions = useMachineSessions();
   const [agents, setAgents] = useState<AgentKind[]>([]);
@@ -287,7 +288,7 @@ export function NewSessionDialog({ open, defaultCwd, tab = null, onClose, onCrea
       const outcome = firstMessageOutcome(request, result);
       if (outcome.kind === "not_queued") {
         // the agent runs without its first message: the text waits in the new tab's message box, and the dialog says so
-        composerDrafts.set(`herdr-web-ui:composer-draft:${paneStorageId(machineId, result.pane_id)}`, request.first_message!);
+        composerDrafts.set(composerDraftKey(paneStateOwner(machineId, result.pane_id, lifetimes.get(machineId))), request.first_message!);
         setPending(false);
         setError({
           message: outcome.error

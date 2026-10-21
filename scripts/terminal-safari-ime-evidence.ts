@@ -9,6 +9,7 @@ import { preview } from "vite";
 import { createServer } from "../server/index.ts";
 import { paneRead, paneSendText, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import { chromePath } from "./chrome-path.ts";
+import { lensInitScript, paneLensKey } from "./pane-lens.ts";
 
 assert(process.env.HERDR_TEST_LIVE !== "1" && process.env.HERDR_TEST_MODE !== "unit");
 process.env.HERDR_TEST_SESSION ||= "herdr-web-ui-test-ime-evidence";
@@ -78,10 +79,10 @@ process.stdin.on('data', bytes => {
       } } });
       web.httpServer.on("connection", socket => { sockets.add(socket); socket.once("close", () => sockets.delete(socket)); });
       const address = web.httpServer.address(); assert(address && typeof address !== "string");
+      await context.addInitScript(lensInitScript({ [paneLensKey(pane)]: "terminal" }));
       await context.addInitScript(pane => {
         Object.defineProperty(navigator, "platform", { get: () => "MacIntel" });
         localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", terminalInputMode: "direct" }));
-        localStorage.setItem(`herdr-web-ui:view:${pane}`, "terminal");
       }, pane);
       const page = await context.newPage();
       let ready = false;

@@ -1,3 +1,5 @@
+import { memoryPaneState } from "./paneState.ts";
+
 /** Drafts and in-flight sends belong to their pane, even while its composer is unmounted. */
 type DraftStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 interface Draft { text: string; sending: boolean }
@@ -9,6 +11,9 @@ interface InFlight { sent: string; at: number }
  */
 export const SEND_LEASE_MS = 120_000;
 const SENDING_PREFIX = "herdr-web-ui:composer-sending:";
+const DRAFT_PREFIX = "herdr-web-ui:composer-draft:";
+/** A page-only owner's draft (lib/paneState.ts): never read from or written to storage. */
+const pageOnly = (key: string): boolean => key.startsWith(DRAFT_PREFIX) && memoryPaneState(key.slice(DRAFT_PREFIX.length));
 export class ComposerDraftStore {
   private drafts = new Map<string, Draft>();
   private saved = new Map<string, string | null>();
@@ -30,7 +35,7 @@ export class ComposerDraftStore {
     let draft = this.drafts.get(key);
     if (!draft) {
       let text: string | null = null;
-      try { text = this.storage().getItem(key); } catch { /* private mode */ }
+      if (!pageOnly(key)) try { text = this.storage().getItem(key); } catch { /* private mode */ }
       this.saved.set(key, text);
       draft = { text: text ?? "", sending: false };
       this.drafts.set(key, draft);
@@ -39,6 +44,7 @@ export class ComposerDraftStore {
   }
   /** The send another tab has in flight, or null: absent, expired, or this tab's own. */
   private inFlight(key: string): InFlight | null {
+    if (pageOnly(key)) return null;
     try {
       const raw = this.storage().getItem(SENDING_PREFIX + key);
       if (raw === null) return null;
@@ -52,7 +58,7 @@ export class ComposerDraftStore {
     }
   }
   refresh(key: string): void {
-    if (this.unsaved.has(key)) return;
+    if (this.unsaved.has(key) || pageOnly(key)) return;
     const draft = this.read(key);
     // another tab's send is on its way: its draft must not be sent a second time from here
     const lease = this.inFlight(key);
@@ -80,6 +86,7 @@ export class ComposerDraftStore {
     const pending = this.pending.get(key);
     if (pending && !text.startsWith(pending.sent)) pending.edited = true;
     this.drafts.set(key, { ...draft, text });
+    if (pageOnly(key)) { this.notify(); return; }
     try {
       if (text) this.storage().setItem(key, text);
       else this.storage().removeItem(key);
@@ -98,7 +105,7 @@ export class ComposerDraftStore {
     if (sent !== undefined) this.pending.set(key, { sent, edited: false });
     this.drafts.set(key, { ...draft, sending: true });
     // the lease, so a second tab on this pane sees the send instead of the text it carries
-    try { this.storage().setItem(SENDING_PREFIX + key, JSON.stringify({ sent: sent ?? "", at: Date.now() })); }
+    if (!pageOnly(key)) try { this.storage().setItem(SENDING_PREFIX + key, JSON.stringify({ sent: sent ?? "", at: Date.now() })); }
     catch { /* private mode: the flag stays this tab's alone */ }
     this.notify();
     return true;
@@ -106,7 +113,7 @@ export class ComposerDraftStore {
   end(key: string): void {
     this.pending.delete(key);
     this.own.delete(key);
-    try { this.storage().removeItem(SENDING_PREFIX + key); } catch { /* private mode */ }
+    if (!pageOnly(key)) try { this.storage().removeItem(SENDING_PREFIX + key); } catch { /* private mode */ }
     this.drafts.set(key, { ...this.read(key), sending: false });
     this.notify();
   }
@@ -131,7 +138,7 @@ export const composerDrafts = new ComposerDraftStore();
 export function storageEventDraft(key: string | null): string | null {
   if (key === null) return null;
   if (key.startsWith(SENDING_PREFIX)) return key.slice(SENDING_PREFIX.length);
-  return key.startsWith("herdr-web-ui:composer-draft:") ? key : null;
+  return key.startsWith(DRAFT_PREFIX) ? key : null;
 }
 if (typeof window !== "undefined") window.addEventListener("storage", (event) => {
   const key = storageEventDraft(event.key);

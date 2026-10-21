@@ -9,6 +9,7 @@ import { createServer } from "../server/index.ts";
 import { HerdrError, herdrRpc, sessionSnapshot, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import { UsageService } from "../server/usage.ts";
 import { contextMenuKey } from "./context-menu-key.ts";
+import { lensInitScript, paneLensKey } from "./pane-lens.ts";
 
 type State = {
   readonly selector: string;
@@ -116,6 +117,7 @@ try {
     headless: true, args: ["--no-sandbox"],
   });
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: "en-US" });
+  await context.addInitScript(lensInitScript(Object.fromEntries([...fixtures.map(({ paneId }) => paneId), split.pane.pane_id].map((id) => [paneLensKey(id), "chat"]))));
   await context.addInitScript(({ ids, legacyFoldKey }) => {
     // Browser locale alone does not override the app's remembered language.
     // Preserve a language changed through Settings across subsequent reloads.
@@ -125,7 +127,6 @@ try {
       localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", alertsOn: false, sidebarRows: "two" }));
       localStorage.setItem(legacyFoldKey, "1");
     }
-    for (const id of ids) localStorage.setItem(`herdr-web-ui:view:${id}`, "chat");
   }, { ids: [...fixtures.map(({ paneId }) => paneId), split.pane.pane_id], legacyFoldKey: workspaceFoldKey });
   const page = await context.newPage();
   page.setDefaultTimeout(15_000);

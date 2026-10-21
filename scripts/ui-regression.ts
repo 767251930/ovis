@@ -32,6 +32,7 @@ import type { CspWatch } from "./csp-violations.ts";
 import { browserEvidencePage, browserEvidenceTracing, startBrowserEvidence } from "./browser-evidence.ts";
 import type { BrowserEvidenceSession } from "./browser-evidence.ts";
 import { chromePath } from "./chrome-path.ts";
+import { lensInitScript, paneLensKey } from "./pane-lens.ts";
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "herdr-web-ui-browser-")));
 const workspaces: string[] = [];
@@ -92,10 +93,10 @@ try {
     headless: true, args: ["--no-sandbox", "--accept-lang=en-US"],
   });
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  await context.addInitScript(lensInitScript(Object.fromEntries(panes.map((id) => [paneLensKey(id), "chat"]))));
   await context.addInitScript((ids) => {
     // only the first load: a reload must keep what Settings stored, such as the language
     if (!localStorage.getItem("herdr-web-ui:settings")) localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en" }));
-    for (const id of ids) localStorage.setItem(`herdr-web-ui:view:${id}`, "chat");
   }, panes);
   // A hook for a check that changes the roster on a page already loaded: a route cannot reach the
   // /api/machines/events stream the page has open, so `window.__rewriteMachinesFrame`, while set,

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Browser, BrowserContext, Page, Route, WebSocket } from "playwright-core";
 import { herdrRpc, paneRead, paneSplit, tabCreate, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
+import { lensInitScript, paneLensKey } from "./pane-lens.ts";
 
 /**
  * The split view's edges (lib/split.ts), each on a browser context of its own: the other half's
@@ -30,9 +31,9 @@ export async function checkSplitView(browser: Browser, origin: string): Promise<
   const open = async (panes: string[], view: "chat" | "terminal", before?: (context: BrowserContext) => Promise<unknown>, options: { blockViewWrites?: boolean; platform?: string } = {}): Promise<{ page: Page; errors: string[] }> => {
     const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, locale: "en-US" });
     contexts.push(context);
+    await context.addInitScript(lensInitScript(Object.fromEntries(panes.map((id) => [paneLensKey(id), view]))));
     await context.addInitScript(([ids, lens, blockViewWrites, platform]) => {
       if (localStorage.getItem("herdr-web-ui:settings") === null) localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", alertDone: "off" }));
-      for (const id of ids as string[]) localStorage.setItem(`herdr-web-ui:view:${id}`, lens as string);
       if (blockViewWrites) {
         const setItem = Storage.prototype.setItem;
         Object.defineProperty(Storage.prototype, "setItem", {
@@ -590,7 +591,7 @@ export async function checkSplitView(browser: Browser, origin: string): Promise<
       await settled(page);
       assert.equal(await half(page, "left").locator(".pane-slot-action").first().getAttribute("aria-label"), "Show the chat",
         "the inactive half reflects its explicit terminal choice");
-      assert.equal(await page.evaluate((pane) => localStorage.getItem(`herdr-web-ui:view:${pane}`), left), "chat",
+      assert.equal(await page.evaluate((key) => localStorage.getItem(key), paneLensKey(left)), "chat",
         "the fixture's stored value remains unchanged after the blocked write");
       await half(page, "left").locator(".terminal-host").click({ position: { x: 40, y: 40 } });
       await isActive(page, "left");

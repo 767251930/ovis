@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { EventEmitter, once } from "node:events";
 import { mkdirSync } from "node:fs";
 import type { Browser } from "playwright-core";
+import { lensInitScript, paneLensKey } from "./pane-lens.ts";
 
 /**
  * iPadOS 27 Safari with a Magic Keyboard sends each jamo as a printable keydown (its own keyCode,
@@ -28,11 +29,11 @@ export async function checkIpadIme(browser: Browser, origin: string, pane: strin
   // and an iPhone's
   for (const platform of ["MacIntel", "iPad", "iPhone"]) {
     const page = await (platform === "iPhone" ? iphone : context).newPage();
+    await page.addInitScript(lensInitScript({ [paneLensKey(pane)]: "terminal" }));
     await page.addInitScript(({ pane, platform }) => {
       Object.defineProperty(navigator, "platform", { get: () => platform });
       Object.defineProperty(navigator, "maxTouchPoints", { get: () => 5 });
       localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", terminalInputMode: "direct" }));
-      localStorage.setItem(`herdr-web-ui:view:${pane}`, "terminal");
     }, { pane, platform });
     const sent: Array<{ pane_id: string; text: string }> = [];
     const signals = new EventEmitter();

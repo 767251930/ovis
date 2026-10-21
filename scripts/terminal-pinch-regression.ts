@@ -9,6 +9,7 @@ import { workspaceCreate, workspaceClose } from "../server/herdr/client.ts";
 import { UsageService } from "../server/usage.ts";
 import { chromePath } from "./chrome-path.ts";
 import { openSettingsPage } from "./settings-page.ts";
+import { lensInitScript, paneLensKey } from "./pane-lens.ts";
 
 async function until(check: () => boolean | Promise<boolean>, label: string): Promise<void> {
   const deadline = Date.now() + 10_000;
@@ -21,10 +22,10 @@ async function until(check: () => boolean | Promise<boolean>, label: string): Pr
 /** Real phone touch events: live font and badge while pinching, one resize and saved size on release, restore on cancel. */
 export async function checkTerminalPinch(browser: Browser, origin: string, paneId: string): Promise<void> {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, locale: "en-US" });
+  await context.addInitScript(lensInitScript({ [paneLensKey(paneId)]: "terminal" }));
   await context.addInitScript(({ paneId }) => {
     // Keep the size saved by the gesture when this same page reloads.
     if (!localStorage.getItem("herdr-web-ui:settings")) localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en" }));
-    localStorage.setItem(`herdr-web-ui:view:${paneId}`, "terminal");
     const touchWindow = window as Window & { wheels_: number; wheelModes_: number[]; remaining_: number[] };
     touchWindow.wheels_ = 0;
     touchWindow.wheelModes_ = [];

@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { Recorder } from "./record.ts";
 import { closeCompositor, composeStill, composeVideo } from "./compose.ts";
 import { chromePath } from "../chrome-path.ts";
+import { paneLensKey } from "../pane-lens.ts";
 const { herdrRpc } = await import("../../server/herdr/client.ts");
 
 const OUT = join(import.meta.dir, "../../docs/screenshots");
@@ -22,7 +23,7 @@ mkdirSync(OUT, { recursive: true });
 const demo = await stage();
 // headless screencasts come at 1x unless the whole browser renders at 2x
 const browser = await chromium.launch({ executablePath: chromePath(), headless: true, args: ["--no-sandbox", "--force-device-scale-factor=2"] });
-const views = Object.fromEntries(demo.panes.map((x) => ["herdr-web-ui:view:" + x.pane, x.agent ? "chat" : "terminal"]));
+const views = Object.fromEntries(demo.panes.map((x) => [paneLensKey(x.pane), x.agent ? "chat" : "terminal"]));
 const DESKTOP = { width: 1440, height: 900 };
 const VIDEO_DESKTOP = { width: 1280, height: 800 };
 const PHONE = { width: 390, height: 844 };

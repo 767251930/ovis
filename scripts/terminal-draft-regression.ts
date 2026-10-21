@@ -1,4 +1,5 @@
 import type { Browser } from "playwright-core";
+import { lensInitScript, paneLensKey } from "./pane-lens.ts";
 
 /**
  * Input typed into a terminal while the app is offline is held for the user to send or discard
@@ -8,9 +9,9 @@ import type { Browser } from "playwright-core";
 export async function checkHeldDraftPaneSwitch(browser: Browser, origin: string, paneA: string, paneB: string): Promise<void> {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   try {
+    await context.addInitScript(lensInitScript(Object.fromEntries([paneA, paneB].map((id) => [paneLensKey(id), "terminal"]))));
     await context.addInitScript((ids) => {
       localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", alertsOn: false, terminalInputMode: "direct" }));
-      for (const id of ids) localStorage.setItem(`herdr-web-ui:view:${id}`, "terminal");
     }, [paneA, paneB]);
     await context.routeWebSocket(/\/ws(?:\?|$)/, (socket) => socket.close({ code: 1000, reason: "offline for the held-input check" }));
     const page = await context.newPage();
@@ -33,9 +34,9 @@ export async function checkHeldDraftPaneSwitch(browser: Browser, origin: string,
   // draft must still be there after a pane switch
   const notReady = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   try {
+    await notReady.addInitScript(lensInitScript(Object.fromEntries([paneA, paneB].map((id) => [paneLensKey(id), "terminal"]))));
     await notReady.addInitScript((ids) => {
       localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", alertsOn: false, terminalInputMode: "direct" }));
-      for (const id of ids) localStorage.setItem(`herdr-web-ui:view:${id}`, "terminal");
     }, [paneA, paneB]);
     await notReady.routeWebSocket(/\/ws(?:\?|$)/, (socket) => {
       const server = socket.connectToServer();

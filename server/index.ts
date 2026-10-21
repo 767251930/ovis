@@ -169,6 +169,8 @@ export function createServer(
     opencodeDb?: string;
     /** OpenCode state dir where service.json lives; tests use an isolated directory. */
     openCodeStateDir?: string;
+    /** herdr's daemon identity behind `herdr_lifetime`; unset, the socket's own (server/finishes.ts). Tests swap one in. */
+    herdrIdentity?: () => string | null;
     /** Native Devin store; tests pass an isolated SQLite database. */
     devinDbPath?: string;
     /** Native Hermes store; pane process HERMES_HOME wins when this is unset. Tests use an isolated store. */

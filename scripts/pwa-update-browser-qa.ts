@@ -9,6 +9,7 @@ import { Database } from "bun:sqlite";
 import { chromium, type CDPSession } from "playwright-core";
 import { herdrRpc, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import { chromePath } from "./chrome-path.ts";
+import { testPaneStateOwner } from "./pane-lens.ts";
 
 const repo = resolve(import.meta.dir, "..");
 const root = mkdtempSync(join(tmpdir(), "herdr-web-ui-pwa-"));
@@ -201,7 +202,7 @@ try {
       await placeholder.waitFor();
       assert.ok((await placeholder.textContent())?.trim(), "the cached app draws its connection state, not a blank root");
       assert.equal(await page.locator('script[type="module"][src]').getAttribute("src"), entry);
-      assert.equal(await page.evaluate((key) => localStorage.getItem(key), `herdr-web-ui:composer-draft:${pane}`), draft,
+      assert.equal(await page.evaluate((key) => localStorage.getItem(key), `herdr-web-ui:composer-draft:${testPaneStateOwner(pane)}`), draft,
         "the draft survives while the offline composer is unmounted");
       assert.ok(requests.some((request) => request.phase === phase && request.url === new URL(entry, origin).href && request.status === 200 && request.fromWorker),
         "the entry really loads from the service worker while offline");

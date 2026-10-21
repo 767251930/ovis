@@ -11,6 +11,7 @@ import type { Socket } from "node:net";
 import { build, preview, type Plugin, type PreviewServer } from "vite";
 import { createServer } from "../server/index.ts";
 import { workspaceCreate, workspaceClose, paneSendText } from "../server/herdr/client.ts";
+import { paneLensKey } from "./pane-lens.ts";
 
 assert(process.env.HERDR_TEST_LIVE !== "1", "This diagnostic requires an isolated test session");
 assert(process.env.HERDR_TEST_MODE !== "unit", "This diagnostic requires a test herdr");
@@ -38,9 +39,9 @@ process.stdin.on('data', bytes => {
 `);
 
 /** Runs only in this diagnostic's temporary build, before the app connects. */
-function installTrace(pane: string): void {
+function installTrace(pane: string, lensKey: string): void {
   localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", terminalInputMode: "direct" }));
-  localStorage.setItem(`herdr-web-ui:view:${pane}`, "terminal");
+  localStorage.setItem(lensKey, "terminal");
   let sequence = 0;
   let pending = Promise.resolve<unknown>(undefined);
   const trace = (row: Record<string, unknown>): void => {
@@ -142,7 +143,7 @@ try {
       return code.replace(anchor, `${anchor}\n(window as any).terminalImeTrace({kind: "onData", data, pane: paneRef.current});`);
     },
     transformIndexHtml() {
-      return [{ tag: "script", children: `(${installTrace.toString()})(${JSON.stringify(pane)});`, injectTo: "head-prepend" }];
+      return [{ tag: "script", children: `(${installTrace.toString()})(${JSON.stringify(pane)}, ${JSON.stringify(paneLensKey(pane))});`, injectTo: "head-prepend" }];
     },
     configurePreviewServer(server) {
       server.middlewares.use("/__ime_trace", (request, response) => {

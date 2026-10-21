@@ -14,6 +14,7 @@ import { UsageService } from "../server/usage.ts";
 import { chromePath } from "./chrome-path.ts";
 import { runMoreItem } from "./header-more.ts";
 import "./test-herdr.ts";
+import { lensInitScript, paneLensKey } from "./pane-lens.ts";
 
 const socket = process.env["HERDR_SOCKET"] ?? "";
 const xdg = process.env["XDG_CONFIG_HOME"] ?? "";
@@ -34,9 +35,9 @@ const selectedPane = (page: Page): Promise<string | null> => page.evaluate(() =>
   JSON.parse(sessionStorage.getItem("herdr-web-ui:selection") ?? "null")?.pane_id ?? null);
 
 async function openApp(context: BrowserContext, origin: string, pane: string, panes: string[]): Promise<Page> {
+  await context.addInitScript(lensInitScript(Object.fromEntries(panes.map((id) => [paneLensKey(id), "chat"]))));
   await context.addInitScript((ids: string[]) => {
     if (!localStorage.getItem("herdr-web-ui:settings")) localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en" }));
-    for (const id of ids) localStorage.setItem(`herdr-web-ui:view:${id}`, "chat");
   }, panes);
   const page = await context.newPage();
   page.setDefaultTimeout(10_000);

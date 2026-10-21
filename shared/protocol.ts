@@ -51,6 +51,14 @@ export type SessionSnapshot = Omit<HerdrSnapshot, "panes"> & {
   panes: HerdrPane[];
   /** Random per bridge start and observed herdr socket/marker replacement, independently per PC. */
   finish_epoch?: string;
+  /**
+   * An opaque digest of the herdr daemon this snapshot was read from (its socket's device, inode
+   * and creation time, or the Windows pid:start marker): the same across bridge restarts, new when
+   * herdr itself was replaced and reuses pane IDs. Absent when the read could not prove one daemon
+   * (unreadable identity, a replacement during the read) and on older bridges. Pane drafts and
+   * lenses are kept per lifetime (paneStateStorageId, shared/machines.ts).
+   */
+  herdr_lifetime?: string;
 };
 
 export type { Machine, MachineEvent, PaneTarget, SetupJob, SetupRequest, SetupAction, BridgeIdentity, BridgeHealth } from "./machines.ts";

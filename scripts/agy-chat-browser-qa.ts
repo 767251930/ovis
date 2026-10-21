@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { chromium } from "playwright-core";
 import { createServer } from "../server/index.ts";
 import { herdrRpc, sessionSnapshot, workspaceCreate, workspaceClose } from "../server/herdr/client.ts";
+import { lensInitScript, paneLensKey } from "./pane-lens.ts";
 
 if (process.platform !== "linux") { console.log("SKIP Agy process fixture requires Linux"); process.exit(0); }
 const root = mkdtempSync(join(tmpdir(), "herdr-agy-activity-"));
@@ -47,7 +48,7 @@ try {
   page.setDefaultTimeout(12_000);
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));
-  await page.addInitScript(id => localStorage.setItem(`herdr-web-ui:view:${id}`, "chat"), pane);
+  await page.addInitScript(lensInitScript({ [paneLensKey(pane)]: "chat" }));
   await page.goto(`http://127.0.0.1:${server.port}/?pane=${encodeURIComponent(pane)}`);
   const log = page.locator(`.pane-frame[data-layout-pane="${pane}"]`).getByRole("log");
   const activity = log.locator(".chat-activity");

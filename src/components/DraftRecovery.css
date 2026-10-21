@@ -1,0 +1,212 @@
+.draft-recovery:focus {
+  outline: none;
+}
+
+.draft-recovery-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.draft-recovery-intro,
+.draft-recovery-empty {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+.draft-recovery-empty {
+  color: var(--text-dim);
+}
+
+.draft-recovery-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.draft-recovery-list > li {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.draft-recovery-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  width: 100%;
+  min-height: var(--control-h);
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-elevated);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  .draft-recovery-row:hover {
+    background: var(--bg-hover);
+    border-color: var(--border-strong);
+  }
+}
+
+/* picked: the accent edge and a check-like inset, not the colour alone - the detail opens under it */
+.draft-recovery-row[aria-pressed="true"] {
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
+  background: var(--accent-tint);
+}
+
+.draft-recovery-row:active {
+  background: var(--bg-hover);
+}
+
+.draft-recovery-row-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-2);
+  min-width: 0;
+}
+
+.draft-recovery-kind {
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+}
+
+.draft-recovery-place,
+.draft-recovery-origin {
+  min-width: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+
+.draft-recovery-preview {
+  overflow: hidden;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.draft-recovery-preview.is-problem,
+.draft-recovery-problem {
+  color: var(--danger-text);
+  font-family: inherit;
+}
+
+.draft-recovery-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  background: var(--bg);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.draft-recovery-text {
+  max-height: 12em;
+  margin: 0;
+  overflow: auto;
+  color: var(--text-strong);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.draft-recovery-problem {
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+
+.draft-recovery-destinations {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.draft-recovery-destinations legend {
+  width: 100%;
+  margin-bottom: var(--space-1);
+  padding: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+
+.draft-recovery-destination {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-h);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.draft-recovery-destination input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.draft-recovery-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.draft-recovery-confirm p {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+.draft-recovery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.draft-recovery-note {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+
+.draft-recovery-note:empty {
+  display: none;
+}
+
+/* a finger's target on every control of the dialog */
+@media (pointer: coarse) {
+  .draft-recovery .btn,
+  .draft-recovery-row,
+  .draft-recovery-destination {
+    min-height: var(--touch-target);
+  }
+
+  .draft-recovery-destination input {
+    width: 20px;
+    height: 20px;
+  }
+}

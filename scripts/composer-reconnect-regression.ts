@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import type { Browser, WebSocketRoute } from "playwright-core";
+import { lensInitScript, paneLensKey } from "./pane-lens.ts";
 
 /**
  * A phone's dictation keyboard (Typeless, Wispr Flow, ...) opens its own app to start the
@@ -10,9 +11,9 @@ import type { Browser, WebSocketRoute } from "playwright-core";
 export async function checkComposerReconnect(browser: Browser, origin: string, paneId: string): Promise<void> {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, locale: "en-US" });
   try {
+    await context.addInitScript(lensInitScript({ [paneLensKey(paneId)]: "chat" }));
     await context.addInitScript((pane) => {
       localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en" }));
-      localStorage.setItem(`herdr-web-ui:view:${pane}`, "chat");
     }, paneId);
     const page = await context.newPage();
     const errors: string[] = [];

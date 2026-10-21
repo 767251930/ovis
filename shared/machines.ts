@@ -103,6 +103,27 @@ export interface BridgeIdentity {
 export function paneStorageId(machineId: string, paneId: string): string {
   return machineId === LOCAL_MACHINE ? paneId : `remote:${encodeURIComponent(machineId)}:${encodeURIComponent(paneId)}`;
 }
+const PANE_STATE_VERSION = "pane-state:v1";
+/**
+ * The key of a pane's unsent state (message and terminal-line drafts, held input, its lens): the
+ * pane ID alone is not enough, since a herdr that replaced the previous one hands the same IDs to
+ * other panes. `lifetime` is the snapshot's `herdr_lifetime`, the proven daemon it came from.
+ * A versioned tuple of URI-encoded parts, so no two tuples share a key and none reads as a
+ * `paneStorageId`, which stays the key of status, pins, selection and networking.
+ */
+export function paneStateStorageId(machineId: string, paneId: string, lifetime: string): string {
+  return [PANE_STATE_VERSION, encodeURIComponent(lifetime), encodeURIComponent(machineId), encodeURIComponent(paneId)].join(":");
+}
+/** The tuple of a `paneStateStorageId`, or null for anything else (a legacy bare key). */
+export function parsePaneStateStorageId(id: string): { lifetime: string; machine_id: string; pane_id: string } | null {
+  if (!id.startsWith(`${PANE_STATE_VERSION}:`)) return null;
+  const parts = id.slice(PANE_STATE_VERSION.length + 1).split(":");
+  if (parts.length !== 3) return null;
+  try {
+    const [lifetime, machine_id, pane_id] = parts.map(decodeURIComponent) as [string, string, string];
+    return lifetime && machine_id && pane_id ? { lifetime, machine_id, pane_id } : null;
+  } catch { return null; }
+}
 export function machinePath(machineId: string, path: string): string {
   return machineId === LOCAL_MACHINE ? `/api/${path}` : `/api/machines/${encodeURIComponent(machineId)}/${path}`;
 }

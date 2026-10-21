@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Browser, Page } from "playwright-core";
 import { herdrRpc, paneSendText, workspaceCreate, workspaceClose } from "../server/herdr/client.ts";
+import { lensInitScript, paneLensKey } from "./pane-lens.ts";
 
 /** A plain left drag in the desktop terminal selects and copies instead of reaching herdr. */
 export async function checkTerminalCopy(browser: Browser, origin: string): Promise<void> {
@@ -21,8 +22,8 @@ setInterval(() => {}, 1000);
 `);
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   try {
+    await context.addInitScript(lensInitScript({ [paneLensKey(pane)]: "terminal" }));
     await context.addInitScript((id) => {
-      localStorage.setItem(`herdr-web-ui:view:${id}`, "terminal");
       // WebKit requires the write to start in the gesture, even when its text is
       // fetched later. Record this boundary without granting Chromium a free pass
       // through its persistent clipboard-write permission.
@@ -225,8 +226,8 @@ setInterval(() => {}, 1000);
     // plain HTTP (no navigator.clipboard): the copy command takes over
     const insecure = await browser.newContext({ viewport: { width: 1280, height: 800 } });
     try {
+      await insecure.addInitScript(lensInitScript({ [paneLensKey(pane)]: "terminal" }));
       await insecure.addInitScript((id) => {
-        localStorage.setItem(`herdr-web-ui:view:${id}`, "terminal");
         Object.defineProperty(Navigator.prototype, "clipboard", { get: () => undefined });
         document.addEventListener("copy", (event) => {
           (window as any).copied = event.clipboardData?.getData("text/plain");

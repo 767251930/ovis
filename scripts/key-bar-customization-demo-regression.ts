@@ -7,6 +7,7 @@ import { appFaces } from "./app-faces.ts";
 import panes from "../site/demo/fixtures/panes.json";
 import { buildDemoApp } from "./demo-build.ts";
 import { openSettingsPage } from "./settings-page.ts";
+import { demoPaneLensKey, lensInitScript } from "./pane-lens.ts";
 
 // Production client over the demo's synthetic transport. Editing and typing stay in this
 // disposable, loopback-only app; no herdr session or user terminal is opened.
@@ -141,13 +142,13 @@ try {
     try {
       const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, locale: "en-US" });
       try {
+        await context.addInitScript(lensInitScript({ [demoPaneLensKey(panes.api)]: "terminal" }));
         await context.addInitScript(({ pane, key }) => {
           // Seed once. Reload must read the layout the user just edited.
           if (localStorage.getItem(key) === null) localStorage.setItem(key, JSON.stringify({
             language: "en", terminalInputMode: "direct",
             keyBarExtras: ["alt", "shift-tab", "home-end", "page-up-down", "ctrl-d", "ctrl-z", "pipe", "tilde", "slash"],
           }));
-          localStorage.setItem(`herdr-web-ui:view:${pane}`, "terminal");
         }, { pane: panes.api, key: SETTINGS_KEY });
         const page = await context.newPage();
         const errors: string[] = [];
