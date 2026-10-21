@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { marked } from "marked";
 import { chromium, devices, type Browser, type BrowserContext, type Locator, type Page } from "playwright-core";
 import { appFaces } from "./app-faces.ts";
 import panes from "../site/demo/fixtures/panes.json";
@@ -159,9 +158,9 @@ async function readClipboard(page: Page): Promise<string> {
   return read;
 }
 
-/** A pasted table as a GFM reader shows it: marked's HTML, read by the page's own parser, as each row's cell text. */
+/** A pasted table as a GFM reader shows it: Bun's GFM HTML, read by the page's own parser, as each row's cell text. */
 async function gfmRows(page: Page, gfm: string): Promise<string[][]> {
-  const html = marked.parse(gfm, { async: false, gfm: true });
+  const html = Bun.markdown.html(gfm, { autolinks: true });
   return page.evaluate((markup) => {
     const tables = new DOMParser().parseFromString(markup, "text/html").querySelectorAll("table");
     if (tables.length !== 1) throw new Error(`a GFM reader found ${tables.length} tables in the copy`);
@@ -295,8 +294,8 @@ try {
             assert.deepEqual(cells[0], ["Variable", "Default", "Overrides", "Notes"]);
             assert.equal(cells.length, 4, "a header and three rows");
             assert.ok(cells.every((row) => row.length === 4), "every row has the header's width");
-            assert.ok(marked.parse(copied, { async: false, gfm: true }).includes("<td><code>RELEASE_REGISTRY</code></td>"), "a code span reads back as code");
-            assert.ok(marked.parse(copied, { async: false, gfm: true }).includes('<a href="https://example.com/docs/registry">the registry notes</a>'), "a link keeps its label and address");
+            assert.ok(Bun.markdown.html(copied, { autolinks: true }).includes("<td><code>RELEASE_REGISTRY</code></td>"), "a code span reads back as code");
+            assert.ok(Bun.markdown.html(copied, { autolinks: true }).includes('<a href="https://example.com/docs/registry">the registry notes</a>'), "a link keeps its label and address");
             note("completed-table-copied", { surface: "chat", width, theme, copied, cells });
             await button.evaluate((node) => (node as HTMLElement).blur());
             await page.waitForFunction((node) => node.getAttribute("aria-label") === "Copy table", await button.elementHandle(), { timeout: 5_000 });
