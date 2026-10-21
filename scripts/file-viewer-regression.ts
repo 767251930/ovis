@@ -1465,20 +1465,29 @@ try {
         const frame = view.frameLocator(".file-viewer-page");
         const video = frame.locator("#clip");
         const state = frame.locator("#state");
+        /** a capture of the page in `expected`, taken again when the frame was drawn anew under it */
+        const shootIn = async (name: string, expected: RegExp, ready: () => Promise<unknown> = async () => {}) => {
+          for (let attempt = 0; ; attempt += 1) {
+            await state.filter({ hasText: expected }).waitFor();
+            await ready();
+            await shoot(view, name);
+            if (expected.test(await state.innerText())) return;
+            assert.ok(attempt < 3, `${name} at ${tag}: the page left ${expected} while it was captured`);
+          }
+        };
         await frame.getByText("picture drawn", { exact: true }).waitFor();
         assert.match(await frame.locator("#pic").getAttribute("src") ?? "", /^data:image\/svg\+xml;base64,/, "the chart is put into the page");
         assert.equal(await view.locator(".file-viewer-page").getAttribute("sandbox"), "allow-scripts");
         const first = await video.getAttribute("src") ?? "";
         assert.match(first, new RegExp(`^${origin}/api/fs/page-media/[A-Za-z0-9_-]{32}$`), "the recording plays from its address");
         await state.filter({ hasText: /^frame ready$/ }).waitFor();
-        record.duration = await video.evaluate((element: HTMLVideoElement) => element.duration);
         // a frame to show, not the player's spinner
         const playable = () => video.evaluate((element: HTMLVideoElement) => element.readyState >= 4 || element.networkState === element.NETWORK_IDLE ? undefined : new Promise<void>((done) => {
           element.addEventListener("canplaythrough", () => done(), { once: true });
           element.addEventListener("suspend", () => done(), { once: true });
         }));
-        await playable();
-        await shoot(view, "before-seek");
+        await shootIn("before-seek", /^frame ready$/, playable);
+        record.duration = await video.evaluate((element: HTMLVideoElement) => element.duration);
         const seek = (to: number) => video.evaluate((element: HTMLVideoElement, to: number) => new Promise<number>((done, fail) => {
           element.addEventListener("seeked", () => done(element.currentTime), { once: true });
           element.addEventListener("error", () => fail(new Error(`media error ${element.error?.code}`)), { once: true });
@@ -1492,9 +1501,7 @@ try {
         }));
         assert.ok((record.played as number) > 0, "the recording plays");
         record.seekedTo = await seek(6);
-        await state.filter({ hasText: /^seeked to 6\.0 s$/ }).waitFor();
-        await playable();
-        await shoot(view, "after-seek");
+        await shootIn("after-seek", /^seeked to 6\.0 s$/, playable);
 
         // the app's own document scrolls not sideways; the page's end is reachable
         const sideways = await view.evaluate(() => document.scrollingElement!.scrollWidth - document.scrollingElement!.clientWidth);
@@ -1573,8 +1580,7 @@ try {
         }), reloads += 1);
         record.movedFile = await reload();
         assert.equal(record.movedFile, "error", "a moved recording is refused");
-        await state.filter({ hasText: /^media error/ }).waitFor();
-        await shoot(view, "missing-media");
+        await shootIn("missing-media", /^media error/);
         renameSync(`${clip}.moved`, clip);
         record.restoredFile = await reload();
         assert.equal(record.restoredFile, "loaded", "the same file put back plays again");
@@ -1605,11 +1611,10 @@ try {
         await view.reload();
         await view.locator(".conn-live").waitFor();
         await open();
-        await state.filter({ hasText: /^frame ready$/ }).waitFor();
+        await shootIn("reloaded", /^frame ready$/);
         const second = await video.getAttribute("src") ?? "";
         assert.notEqual(second, first, "a new render gives a new address");
         record.reloadedAddressDiffers = second !== first;
-        await shoot(view, "reloaded");
         // lapsed: past its lifetime the address plays no more
         const client = ["127.0.0.1", "::1", "::ffff:127.0.0.1"].find((candidate) => {
           const response = pageMediaResponse(tokenOf(second), candidate, new Request(second, { method: "HEAD" }));
@@ -1619,8 +1624,7 @@ try {
         assert.equal(pageMediaResponse(tokenOf(second), client, null, Date.now() + PAGE_MEDIA_LIFETIME_MS + 1), null);
         record.expired = await reload();
         assert.equal(record.expired, "error", "a lapsed address is refused");
-        await state.filter({ hasText: /^media error/ }).waitFor();
-        await shoot(view, "expired-media");
+        await shootIn("expired-media", /^media error/);
         // revoked: the client signed out, its addresses go with it
         await closeViewer();
         await view.reload();
@@ -1630,8 +1634,7 @@ try {
         forgetPageMedia({ client });
         record.revoked = await reload();
         assert.equal(record.revoked, "error", "a revoked address is refused");
-        await state.filter({ hasText: /^media error/ }).waitFor();
-        await shoot(view, "revoked");
+        await shootIn("revoked", /^media error/);
         assert.deepEqual(failures, []);
         measured.push({ tag, width, theme, sideways, controls, disabledControls: disabledCount, focus, contrast });
       } finally {
