@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { parseMarkdown, type InlineNode } from "./markdown.ts";
+import { marked } from "marked";
 import { renderedClipboardPayload, serializeMarkdownTable, type ClipboardNode, type MarkdownTable } from "./markdownClipboard.ts";
 
 const text = (value: string): ClipboardNode => ({ tag: "", text: value });
@@ -161,5 +162,46 @@ describe("serializeMarkdownTable", () => {
     // no `*` inside `**`, so those stay with GFM alone
     const marks: InlineNode[] = [{ type: "strong", children: [text("a "), { type: "del", children: [text("b c")] }] }, text(" "), { type: "em", children: [text("d")] }];
     expect(table(serializeMarkdownTable(cells([[text("h")], [text("i")], [text("j")]], [[marks, [], [text(long)]]]))).rows[0]).toEqual([marks, [], [text(long)]]);
+  });
+
+  /** Each cell of the copied table's one row as a GFM reader renders it: inner HTML, in order. */
+  const readBack = (gfm: string): string[] => {
+    const html = marked.parse(gfm, { async: false, gfm: true });
+    const body = /<tbody>([\s\S]*)<\/tbody>/.exec(html)?.[1] ?? "";
+    return [...body.matchAll(/<td>([\s\S]*?)<\/td>/g)].map((cell) => cell[1]!);
+  };
+  /** the characters a reader sees, as GFM writes them into HTML */
+  const shown = (value: string): string => value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;");
+  const oneRow = (nodes: InlineNode[][]): string => serializeMarkdownTable(cells(nodes.map(() => [text("h")]), [nodes]));
+
+  test("reads literal text back from a GFM reader as the characters shown", () => {
+    const literals = [
+      "<b>literal</b> &copy;", "&#169; &amp; &x", "**not bold** *not em*", "~~kept~~ ~one~", "`not code`",
+      "[not](a link) ![not](an image)", "<not-a-tag attr=1>", "a|b", "ends with \\", "C:\\temp\\new",
+      "snake_case_name _not em_ __not strong__", "한국어 <i>그대로</i> &lt;", "'quoted' \"twice\" > 1",
+    ];
+    expect(readBack(oneRow(literals.map((value) => [text(value)])))).toEqual(literals.map(shown));
+  });
+
+  test("keeps the formatting the parsed nodes carry", () => {
+    const nodes: InlineNode[][] = [
+      [{ type: "strong", children: [text("<b>")] }, text(" "), { type: "em", children: [text("a*b")] }, text(" "), { type: "del", children: [text("x~y")] }],
+      [{ type: "code", value: "<b>&copy;" }],
+      [{ type: "link", href: "https://example.com/a_b", children: [text("see <docs>")] }],
+      [{ type: "link", href: "https://example.com/a_b", children: [text("https://example.com/a_b")] }],
+      [{ type: "image", alt: "a *pic* [1]", src: "img/a.png", fallback: [] }],
+    ];
+    expect(readBack(oneRow(nodes))).toEqual([
+      "<strong>&lt;b&gt;</strong> <em>a*b</em> <del>x~y</del>",
+      "<code>&lt;b&gt;&amp;copy;</code>",
+      '<a href="https://example.com/a_b">see &lt;docs&gt;</a>',
+      '<a href="https://example.com/a_b">https://example.com/a_b</a>',
+      '<img src="img/a.png" alt="a *pic* [1]">',
+    ]);
+  });
+
+  test("keeps a code span's edge spaces and backticks through a GFM reader", () => {
+    const values = [" x ", "  x  ", " x", "x ", "   ", " ", "`x`", " `x` ", "` `", " a``b ", "``", " | "];
+    expect(readBack(oneRow(values.map((value) => [{ type: "code", value }])))).toEqual(values.map((value) => `<code>${shown(value)}</code>`));
   });
 });

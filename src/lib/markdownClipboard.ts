@@ -48,10 +48,14 @@ export function renderedClipboardPayload(nodes: readonly ClipboardNode[], text: 
 export type MarkdownTable = Extract<MarkdownBlock, { type: "table" }>;
 
 /**
- * What a GFM cell cannot hold unescaped: a pipe ends the cell, a backslash would escape the next
- * character. Inside a link's label a bracket would end the label too.
+ * Literal text as GFM reads it back character for character: a pipe would end the cell, a
+ * backslash escape the next character, `*`, `~`, a backtick or a bracket open emphasis, a strike,
+ * a code span or a link, `<` a tag or an autolink, and `&` before a name and `;` an entity. An
+ * underscore between two letters or digits opens and closes nothing, so `snake_case` stays as it is.
  */
-const escapeText = (value: string, label: boolean): string => value.replace(label ? /[\\|[\]]/g : /[\\|]/g, "\\$&");
+const escapeText = (value: string): string => value.replace(/[\\|*~`[\]<]|(?<![\p{L}\p{N}])_|_(?![\p{L}\p{N}])|&(?=#?[\p{L}\p{N}]+;)/gu, "\\$&");
+/** An address written bare, to be read as a link again: only what would end the cell is escaped. */
+const escapeAddress = (value: string): string => value.replace(/[\\|]/g, "\\$&");
 /**
  * A destination holds no whitespace, and a parenthesis, pipe or backslash in one would end it or
  * the cell: percent-encoded, the address still names the same resource, and it reads back as one.
@@ -60,14 +64,16 @@ const escapeDestination = (value: string): string => value.replace(/[\s()|\\]/g,
 
 /**
  * A code span whose delimiter is longer than any run of backticks inside it, padded with a space
- * when the code starts or ends with a backtick (CommonMark strips one space from each end). A pipe
- * inside is still escaped: GFM reads the cell's pipes before its spans. A backslash is not: a code
- * span is literal.
+ * when the code starts or ends with a backtick, or starts and ends with a space and is not all
+ * spaces: CommonMark strips one space from each end of such a span, so the pad is what it strips. A
+ * pipe inside is still escaped: GFM reads the cell's pipes before its spans. A backslash is not: a
+ * code span is literal.
  */
 function codeSpan(value: string): string {
   const longest = Math.max(0, ...[...value.matchAll(/`+/g)].map((run) => run[0].length));
   const fence = "`".repeat(longest + 1);
-  const pad = value.startsWith("`") || value.endsWith("`") ? " " : "";
+  const spaced = value.startsWith(" ") && value.endsWith(" ") && /[^ ]/.test(value);
+  const pad = value.startsWith("`") || value.endsWith("`") || spaced ? " " : "";
   return `${fence}${pad}${value.replace(/\|/g, "\\|")}${pad}${fence}`;
 }
 
@@ -83,23 +89,23 @@ const bare = (node: Extract<InlineNode, { type: "link" | "file" }>): string | nu
  * Emphasis is written with `*`, which reads inside a word too; a formula keeps its backslashes,
  * which are its commands, and only its pipes are escaped.
  */
-function inlineSource(nodes: readonly InlineNode[], label = false): string {
+function inlineSource(nodes: readonly InlineNode[]): string {
   let out = "";
   for (const node of nodes) {
     switch (node.type) {
-      case "text": out += escapeText(node.value, label); break;
+      case "text": out += escapeText(node.value); break;
       case "code": out += codeSpan(node.value); break;
       case "math": out += `\\(${node.value.replace(/\|/g, "\\|")}\\)`; break;
-      case "strong": out += `**${inlineSource(node.children, label)}**`; break;
-      case "em": out += `*${inlineSource(node.children, label)}*`; break;
-      case "del": out += `~~${inlineSource(node.children, label)}~~`; break;
+      case "strong": out += `**${inlineSource(node.children)}**`; break;
+      case "em": out += `*${inlineSource(node.children)}*`; break;
+      case "del": out += `~~${inlineSource(node.children)}~~`; break;
       case "link":
       case "file": {
         const address = bare(node);
-        out += address !== null ? escapeText(address, label) : `[${inlineSource(node.children, true)}](${escapeDestination(node.type === "link" ? node.href : node.path)})`;
+        out += address !== null ? escapeAddress(address) : `[${inlineSource(node.children)}](${escapeDestination(node.type === "link" ? node.href : node.path)})`;
         break;
       }
-      case "image": out += `![${escapeText(node.alt, true)}](${escapeDestination(node.src)})`; break;
+      case "image": out += `![${escapeText(node.alt)}](${escapeDestination(node.src)})`; break;
     }
   }
   return out.replace(/\r\n|[\n\r\u2028\u2029]/g, "<br>");
@@ -109,7 +115,7 @@ function inlineSource(nodes: readonly InlineNode[], label = false): string {
  * A table as GFM: the header, a `---` separator per column and every row padded or cut to the
  * header's width, so the result parses as one rectangular table wherever it is pasted. Cells are
  * written from the parsed nodes, not the source: alignment the parser does not keep is not
- * promised, and a cell's pipes and backslashes come out escaped.
+ * promised, and a cell's literal text comes out escaped, so a GFM reader shows what was shown here.
  */
 export function serializeMarkdownTable(table: MarkdownTable): string {
   const width = Math.max(1, table.header.length);

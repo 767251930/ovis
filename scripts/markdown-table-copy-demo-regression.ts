@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { marked } from "marked";
 import { chromium, devices, type Browser, type BrowserContext, type Locator, type Page } from "playwright-core";
 import { appFaces } from "./app-faces.ts";
 import panes from "../site/demo/fixtures/panes.json";
@@ -25,7 +26,7 @@ const app = mkdtempSync(join(tmpdir(), "herdr-markdown-table-copy-demo-"));
 const evidence = process.env.UI_EVIDENCE_DIR || join(repo, "evidence");
 const PANE = panes.cli;
 const FILE = "TABLES.md";
-/** the demo answers a sent message in 2.4 s; the turn is live until then */
+/** the demo's answer is held until the live turn has been checked and seen; released, it settles the turn */
 const ANSWER_MS = 15_000;
 
 const ENV_TABLE = [
@@ -39,7 +40,11 @@ const LANGUAGE_ROW = "| `RELEASE_LANGUAGE` | `ko` | `--language` | 한국어 안
 /** what the pi pane answers to ASK, as the demo's answer arrives: cut inside a row, then whole */
 const ASK = "Show the environment table with the language row";
 const PARTIAL_ANSWER = `Here it is, with the language row:\n\n${ENV_TABLE.split("\n").slice(0, 4).join("\n")}\n| \`RELEASE_DRY_RUN\` | unset | \`--dry-r`;
-const WHOLE_TABLE = `${ENV_TABLE}\n${LANGUAGE_ROW}`;
+/** text the app shows as written: tags, an entity and a trailing backslash a GFM reader must not read as markup */
+const LITERAL_ROW = "| `RELEASE_NOTE` | <b>literal</b> &copy; | `--note` | C:\\temp\\ |";
+const WHOLE_TABLE = `${ENV_TABLE}\n${LANGUAGE_ROW}\n${LITERAL_ROW}`;
+/** WHOLE_TABLE as copied: the literal row's markup characters escaped, so a GFM reader shows them as text */
+const WHOLE_COPY = `${ENV_TABLE}\n${LANGUAGE_ROW}\n| \`RELEASE_NOTE\` | \\<b>literal\\</b> \\&copy; | \`--note\` | C:\\\\temp\\\\ |`;
 const WHOLE_ANSWER = `Here it is, with the language row:\n\n${WHOLE_TABLE}\n\nSet them in the shell that runs \`release publish\`.`;
 const LONG_CELL = `ghp_${"x".repeat(96)}`;
 const FILE_TEXT = [
@@ -105,6 +110,22 @@ const HOLD_SCRIPT = `<script>(() => {
   };
 })();</script>`;
 
+/**
+ * While window.__holdAnswer is set, the demo's answer to a sent message (its CHAT_ANSWER_MS timer in
+ * site/demo/transport.ts) waits for window.__releaseAnswer(): the live turn is checked and seen
+ * before it can settle, whatever the machine's speed.
+ */
+const ANSWER_HOLD_SCRIPT = `<script>(() => {
+  const later = window.setTimeout;
+  const held = [];
+  window.__heldAnswers = () => held.length;
+  window.setTimeout = (callback, ms, ...args) => {
+    if (window.__holdAnswer && ms === 2400 && typeof callback === "function") { held.push(() => callback(...args)); return 0; }
+    return later(callback, ms, ...args);
+  };
+  window.__releaseAnswer = () => { window.__holdAnswer = false; for (const run of held.splice(0)) run(); };
+})();</script>`;
+
 type Theme = "light" | "dark";
 interface Shot { file: string; width: number; height: number; theme: Theme; language: string; state: string; sha256: string; capturedAt: string }
 const manifest: Shot[] = [];
@@ -138,8 +159,18 @@ async function readClipboard(page: Page): Promise<string> {
   return read;
 }
 
-/** A GFM table's cells, as a reader of the clipboard would split them. */
-const cellsOf = (gfm: string): string[][] => gfm.split("\n").map((line) => line.replace(/^\| /, "").replace(/ \|$/, "").split(" | "));
+/** A pasted table as a GFM reader shows it: marked's HTML, read by the page's own parser, as each row's cell text. */
+async function gfmRows(page: Page, gfm: string): Promise<string[][]> {
+  const html = marked.parse(gfm, { async: false, gfm: true });
+  return page.evaluate((markup) => {
+    const tables = new DOMParser().parseFromString(markup, "text/html").querySelectorAll("table");
+    if (tables.length !== 1) throw new Error(`a GFM reader found ${tables.length} tables in the copy`);
+    return [...tables[0]!.rows].map((row) => [...row.cells].map((cell) => cell.textContent ?? ""));
+  }, html);
+}
+
+/** The table as the app shows it: each row's cell text. */
+const shownRows = (block: Locator): Promise<string[][]> => block.locator("table").evaluate((table: HTMLTableElement) => [...table.rows].map((row) => [...row.cells].map((cell) => cell.textContent ?? "")));
 
 /** Tab reaches the button from the element before it, so the ring is the keyboard's (:focus-visible). */
 async function focusByKeyboard(page: Page, button: Locator): Promise<void> {
@@ -154,7 +185,7 @@ async function focusByKeyboard(page: Page, button: Locator): Promise<void> {
   assert.equal(await button.evaluate((node) => node === document.activeElement && node.matches(":focus-visible")), true, "Tab lands on the copy with a visible ring");
 }
 
-async function withContext(browser: Browser, width: number, theme: Theme, language: string, run: (page: Page, context: BrowserContext) => Promise<void>, hold = false): Promise<void> {
+async function withContext(browser: Browser, width: number, theme: Theme, language: string, run: (page: Page, context: BrowserContext) => Promise<void>, hold?: "file" | "answer"): Promise<void> {
   const phone = width === 390;
   const context = await browser.newContext({
     ...(phone ? { ...devices["iPhone 14"]!, viewport: { width: 390, height: 844 } } : { viewport: { width, height: 900 } }),
@@ -164,7 +195,8 @@ async function withContext(browser: Browser, width: number, theme: Theme, langua
     await context.addInitScript(([settings, pane, held]) => {
       localStorage.setItem("herdr-web-ui:settings", settings);
       localStorage.setItem(`herdr-web-ui:view:${pane}`, "chat");
-      if (held) (window as unknown as { __holdFile: boolean }).__holdFile = true;
+      if (held === "file") (window as unknown as { __holdFile: boolean }).__holdFile = true;
+      if (held === "answer") (window as unknown as { __holdAnswer: boolean }).__holdAnswer = true;
     }, [JSON.stringify({ language, theme, fileOpen: "panel" }), PANE, hold] as const);
     const page = await context.newPage();
     const errors: string[] = [];
@@ -182,7 +214,7 @@ try {
   const index = join(app, "index.html");
   const html = readFileSync(index, "utf8");
   assert.match(html, /<script type="module"/);
-  writeFileSync(index, html.replace(/<script type="module"/, () => `<script src="./demo-transport.js"></script>${demoFilePreviewScript(FILE, FILE_TEXT)}${CONVERSATION_SCRIPT}${HOLD_SCRIPT}\n    <script type="module"`));
+  writeFileSync(index, html.replace(/<script type="module"/, () => `<script src="./demo-transport.js"></script>${demoFilePreviewScript(FILE, FILE_TEXT)}${CONVERSATION_SCRIPT}${HOLD_SCRIPT}${ANSWER_HOLD_SCRIPT}\n    <script type="module"`));
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
     const path = new URL(request.url).pathname;
     if (!path.startsWith("/herdr-web-ui/demo/app/")) return new Response("not found", { status: 404 });
@@ -244,13 +276,13 @@ try {
             await capture(page, width, theme, "copied");
             const copied = await readClipboard(page);
             assert.equal(copied, ENV_TABLE, "the settled table is copied whole, as GFM");
-            const cells = cellsOf(copied);
+            const cells = await gfmRows(page, copied);
+            assert.deepEqual(cells, await shownRows(block), "a GFM reader shows the copy as the app showed the table");
             assert.deepEqual(cells[0], ["Variable", "Default", "Overrides", "Notes"]);
-            assert.deepEqual(cells[1], ["---", "---", "---", "---"]);
-            assert.equal(cells.length, 5, "a header, its separator and three rows");
-            assert.ok(cells.slice(2).every((row) => row.length === 4), "every row has the header's width");
-            assert.equal(cells[3]![0], "`RELEASE_REGISTRY`", "a code span keeps its backticks");
-            assert.equal(cells[3]![3], "see [the registry notes](https://example.com/docs/registry)", "a link keeps its label and address");
+            assert.equal(cells.length, 4, "a header and three rows");
+            assert.ok(cells.every((row) => row.length === 4), "every row has the header's width");
+            assert.ok(marked.parse(copied, { async: false, gfm: true }).includes("<td><code>RELEASE_REGISTRY</code></td>"), "a code span reads back as code");
+            assert.ok(marked.parse(copied, { async: false, gfm: true }).includes('<a href="https://example.com/docs/registry">the registry notes</a>'), "a link keeps its label and address");
             note("completed-table-copied", { surface: "chat", width, theme, copied, cells });
             await button.evaluate((node) => (node as HTMLElement).blur());
             await page.waitForFunction((node) => node.getAttribute("aria-label") === "Copy table", await button.elementHandle(), { timeout: 5_000 });
@@ -292,6 +324,8 @@ try {
             await settledTable(log).locator(".markdown-table-copy").waitFor({ state: "attached" });
             await page.getByRole("textbox", { name: "Message", exact: true }).fill(ASK);
             await page.getByRole("button", { name: "Send message", exact: true }).click();
+            // the demo's answer is held: nothing settles this turn until it is released below
+            await page.waitForFunction(() => (window as unknown as { __heldAnswers: () => number }).__heldAnswers() === 1);
             const turn = log.locator(".chat-turn-agent").last();
             const live = turn.locator(".markdown-table").filter({ hasText: "RELEASE_REGISTRY" });
             await live.locator("td", { hasText: "--dry-r" }).waitFor();
@@ -301,6 +335,8 @@ try {
             const livePlace = await live.evaluate(placeOf);
             await capture(page, width, theme, "live-hidden");
             note("incomplete-denied-clipboard", { surface: "chat", width, theme, streaming: { copies: 0, rows: await live.locator("tbody tr").count() } });
+            assert.equal(await live.locator(".markdown-table-copy").count(), 0, "still no copy once seen: the answer is still held");
+            await page.evaluate(() => (window as unknown as { __releaseAnswer: () => void }).__releaseAnswer());
             await turn.locator("td", { hasText: "RELEASE_LANGUAGE" }).waitFor({ timeout: ANSWER_MS });
             const settled = turn.locator(".markdown-table").filter({ hasText: "RELEASE_LANGUAGE" });
             const button = settled.locator(".markdown-table-copy");
@@ -310,8 +346,11 @@ try {
             await button.click({ force: true });
             await settled.locator(".markdown-table-copy.is-copied").waitFor();
             const copied = await readClipboard(page);
-            assert.equal(copied, WHOLE_TABLE, "the settled answer copies its whole table, Korean and all");
-            assert.equal(cellsOf(copied)[5]![3], "한국어 안내문은 `docs/ko/README.md`를 봅니다");
+            assert.equal(copied, WHOLE_COPY, "the settled answer copies its whole table, Korean and all, its literal row escaped");
+            const cells = await gfmRows(page, copied);
+            assert.deepEqual(cells, await shownRows(settled), "a GFM reader shows the copy as the app showed the table");
+            assert.deepEqual(cells[5], ["RELEASE_NOTE", "<b>literal</b> &copy;", "--note", "C:\\temp\\"], "tags, an entity and a trailing backslash read back as shown");
+            assert.equal(cells[4]![3], "한국어 안내문은 `docs/ko/README.md`를 봅니다".replaceAll("`", ""), "the Korean row reads back as shown");
             note("completed-table-copied", { surface: "chat after streaming", width, theme, copied });
             await page.waitForFunction((node) => node.getAttribute("aria-label") === "Copy table", await button.elementHandle(), { timeout: 5_000 });
 
@@ -347,7 +386,7 @@ try {
             note("incomplete-denied-clipboard", { surface: "chat", width, theme, denied: { alert: await alert.textContent(), label: await button.getAttribute("aria-label") }, nativeSelection: { text: native, richHasTable: rich.includes("<table>") } });
             await page.evaluate(() => getSelection()!.removeAllRanges());
             console.log(`PASS ${label}: a streaming table hides its copy until the turn settles, a refused clipboard says so without Copied, and the selection still copies natively`);
-          });
+          }, "answer");
 
           // the file Preview: every table has its copy, nested or empty, and the long cell keeps its column
           await withContext(browser, width, theme, "en", async (page) => {
@@ -371,7 +410,9 @@ try {
             const top = tables.first();
             await top.locator(".markdown-table-copy").click({ force: true });
             await top.locator(".is-copied").waitFor();
-            assert.equal(await readClipboard(page), WHOLE_TABLE, "the Preview's first table copies whole, Korean and all");
+            const copiedTop = await readClipboard(page);
+            assert.equal(copiedTop, WHOLE_COPY, "the Preview's first table copies whole, Korean and all, its literal row escaped");
+            assert.deepEqual(await gfmRows(page, copiedTop), await shownRows(top), "a GFM reader shows the Preview's copy as the Preview showed it");
             const empty = viewer.locator(".markdown-table").filter({ hasText: "Column A" });
             await empty.scrollIntoViewIfNeeded();
             await empty.locator(".markdown-table-copy").click({ force: true });
@@ -407,7 +448,7 @@ try {
             await page.evaluate(() => (window as unknown as { __releaseFile: () => void }).__releaseFile());
             await page.locator(".file-viewer .markdown-table-copy").first().waitFor({ state: "attached" });
             console.log(`PASS ${label}: a Preview still opening offers no copy, and the file's tables do once it is in`);
-          }, true);
+          }, "file");
         }
       }
 
