@@ -528,6 +528,8 @@ async function captures(browser: Browser, base: string, dir: string): Promise<vo
       await shot("empty");
       await box.locator(".modal-footer .btn").click();
       await box.waitFor({ state: "detached" });
+      // a phone's sheet slides out in an inert host of its own (lib/sheets.ts): gone before the next shot
+      await page.waitForFunction(() => document.querySelector("body > div[inert][aria-hidden='true']") === null, undefined, { timeout: 10_000 });
       await valueIs(page, ".composer-text", "Rename the backup job and rerun it");
       if (variant.language === "en") {
         // an observer: the recovered text sits in the box, and nothing can send it
