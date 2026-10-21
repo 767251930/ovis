@@ -157,8 +157,8 @@ describe("serializeMarkdownTable", () => {
     const long = "x".repeat(5_000);
     const nested = (inner: string): InlineNode => ({ type: "strong", children: [text("a "), { type: "em", children: [{ type: "del", children: [text(inner)] }] }] });
     expect(row([nested("b|c")], [], [text(long)])).toBe(`| **a *~~b\\|c~~*** |  | ${long} |`);
-    // read back as written, where the parser reads what GFM does: it reads no escaped pipe, and
-    // no `*` inside `**`, so those stay with GFM alone
+    // read back as written, where the parser reads what GFM does: it reads no `*` inside `**`, so
+    // that stays with GFM alone
     const marks: InlineNode[] = [{ type: "strong", children: [text("a "), { type: "del", children: [text("b c")] }] }, text(" "), { type: "em", children: [text("d")] }];
     expect(table(serializeMarkdownTable(cells([[text("h")], [text("i")], [text("j")]], [[marks, [], [text(long)]]]))).rows[0]).toEqual([marks, [], [text(long)]]);
   });
@@ -184,6 +184,12 @@ describe("serializeMarkdownTable", () => {
       "snake_case_name _not em_ __not strong__", "한국어 <i>그대로</i> &lt;", "'quoted' \"twice\" > 1",
     ];
     expect(readBack(oneRow(literals.map((value) => [text(value)])))).toEqual(literals.map(shown));
+  });
+
+  test("copies a source cell's escaped pipe as one cell, read back the same by a GFM reader and this parser", () => {
+    const copied = serializeMarkdownTable(table("| h1 | h2 |\n| --- | --- |\n| a\\|b | c |"));
+    expect(readBack(copied)).toEqual(["a|b", "c"]);
+    expect(table(copied).rows[0]).toEqual([[text("a|b")], [text("c")]]);
   });
 
   test("keeps the formatting the parsed nodes carry", () => {

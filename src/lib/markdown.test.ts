@@ -77,6 +77,11 @@ describe("parseMarkdown", () => {
     const [table] = parseMarkdown("| Name | Value |\n| --- | --- |\n| a | b |");
     expect(table).toMatchObject({ type: "table", header: [[{ value: "Name" }], [{ value: "Value" }]], rows: [[[{ value: "a" }], [{ value: "b" }]]] });
   });
+
+  it("keeps a backslash-escaped pipe inside its table cell, code spans included, as GFM does", () => {
+    const [table] = parseMarkdown("| Name | Value |\n| --- | --- |\n| a\\|b | c |\n| `x\\|y` | z |");
+    expect(table).toMatchObject({ type: "table", rows: [[[{ value: "a|b" }], [{ value: "c" }]], [[{ type: "code", value: "x|y" }], [{ value: "z" }]]] });
+  });
 });
 
 describe("inline markdown", () => {

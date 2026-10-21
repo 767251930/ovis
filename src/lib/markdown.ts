@@ -237,9 +237,31 @@ export function isTableSeparator(line: string): boolean {
   return columns.length >= 2 && columns.every((column) => /^:?-+:?$/.test(column.trim()));
 }
 
+/**
+ * A row's cells, split at its pipes but not at a backslash-escaped one, which stays in its cell as
+ * a plain `|` (code spans included), as GFM reads it; any other backslash pair is left for the
+ * inline parser. The outer pipes bound the row and make no cell.
+ */
 function cells(line: string): string[] {
-  const trimmed = line.trim().replace(/^\|/, "").replace(/\|$/, "");
-  return trimmed.split("|").map((cell) => cell.trim());
+  const text = line.trim().replace(/^\|/, "");
+  const out: string[] = [];
+  let cell = "";
+  let closed = false;
+  for (let index = 0; index < text.length; index++) {
+    const char = text[index]!;
+    closed = false;
+    if (char === "\\" && index + 1 < text.length) {
+      const next = text[index + 1]!;
+      cell += next === "|" ? "|" : char + next;
+      index++;
+    } else if (char === "|") {
+      out.push(cell.trim());
+      cell = "";
+      closed = true;
+    } else cell += char;
+  }
+  if (!closed || out.length === 0) out.push(cell.trim());
+  return out;
 }
 function lineAt(lines: string[], index: number): string {
   return lines[index] ?? "";
