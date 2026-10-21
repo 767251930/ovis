@@ -52,13 +52,16 @@ function legacyOwner(owner: string): { machine_id: string; pane_id: string } | n
   try { return { machine_id: decodeURIComponent(parts[0]!), pane_id: decodeURIComponent(parts[1]!) }; } catch { return null; }
 }
 
-/** A held record's text, or null for nothing to recover: empty, or past its time (draft.ts). */
-function heldText(raw: string, now: number): string | null | "unreadable" {
+/**
+ * A held record's text, null for nothing to recover (empty, or past its time: draft.ts), or
+ * `unreadable` for a record this app did not write. Tagged, so no text is ever taken for that.
+ */
+function heldText(raw: string, now: number): { text: string } | null | "unreadable" {
   let value: unknown;
   try { value = JSON.parse(raw); } catch { return "unreadable"; }
   if (typeof value !== "object" || value === null || typeof (value as { text?: unknown }).text !== "string") return "unreadable";
   const text = restoreDraft(raw, now).text;
-  return text || null;
+  return text ? { text } : null;
 }
 
 /**
@@ -94,7 +97,7 @@ export function recoverableDrafts(storage: Pick<Storage, "length" | "key" | "get
     if (source === "held" && problem === null) {
       const held = heldText(raw, now);
       if (held === null) continue;
-      if (held === "unreadable") { problem = "unreadable"; text = ""; } else text = held;
+      if (held === "unreadable") { problem = "unreadable"; text = ""; } else text = held.text;
     }
     if (problem === null && text.length > LIMITS[source]) problem = "too_large";
     records.push({ key, source, ...(place ?? { machine_id: "", pane_id: "" }), origin, text: problem === null ? inertText(text) : "", problem });

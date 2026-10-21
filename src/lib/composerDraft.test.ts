@@ -2,7 +2,7 @@ import { expect, it, setSystemTime } from "bun:test";
 import { ComposerDraftStore, SEND_LEASE_MS, storageEventDraft } from "./composerDraft.ts";
 import { DRAFT_TTL_MS } from "./draft.ts";
 import { discardDraft, recoverableDrafts, recoverDraft, type RecoveryStores } from "./draftRecovery.ts";
-import { composerDraftKey, memoryPaneState, paneStateOwner } from "./paneState.ts";
+import { composerDraftKey, memoryPaneState, nextLifetimeGenerations, paneStateOwner, type LifetimeGeneration } from "./paneState.ts";
 function fixture() {
   const data = new Map<string, string>();
   const storage = { getItem: (key: string) => data.get(key) ?? null, setItem: (key: string, value: string) => { data.set(key, value); }, removeItem: (key: string) => { data.delete(key); } };
@@ -212,6 +212,42 @@ it("unknown lifetime never hydrates a bare-pane draft", () => {
   expect([...data.keys()].sort()).toEqual(["herdr-web-ui:composer-draft:remote:laptop:w1%3Ap1", "herdr-web-ui:composer-draft:w1:p1"]);
   expect(recoverableDrafts(storage, new Map(), Date.now()).map((record) => [record.machine_id, record.pane_id, record.origin]))
     .toEqual([["laptop", "w1:p1", "legacy"], ["local", "w1:p1", "legacy"]]);
+});
+it("unknown lifetime keeps its page-only owner only within one herdr generation", () => {
+  let minted = 0;
+  const mint = () => `memory.m${++minted}`;
+  let generations = new Map<string, LifetimeGeneration>();
+  const step = (roster: [string, string | null | undefined][]) => {
+    generations = nextLifetimeGenerations(generations, roster, mint);
+    return Object.fromEntries([...generations].map(([id, generation]) => [id, generation.current]));
+  };
+  // an older bridge: one page-only owner through its reconnects (no snapshot meanwhile changes nothing)
+  expect(step([["local", null], ["laptop", "lifetime-l"]])).toEqual({ local: "memory.m1", laptop: "lifetime-l" });
+  expect(step([["local", undefined], ["laptop", "lifetime-l"]])).toEqual({ local: "memory.m1", laptop: "lifetime-l" });
+  expect(step([["local", null], ["laptop", "lifetime-l"]])).toEqual({ local: "memory.m1", laptop: "lifetime-l" });
+  // a proven herdr C comes between: unknown after it is a new owner, never the earlier one
+  expect(step([["local", "lifetime-c"], ["laptop", "lifetime-l"]]).local).toBe("lifetime-c");
+  expect(step([["local", null], ["laptop", "lifetime-l"]]).local).toBe("memory.m2");
+  // the same herdr C proven again: its unknown spell is the same generation's
+  expect(step([["local", "lifetime-c"], ["laptop", "lifetime-l"]]).local).toBe("lifetime-c");
+  expect(step([["local", null], ["laptop", "lifetime-l"]]).local).toBe("memory.m2");
+  // another herdr D replaced C: a new owner again; each PC keeps its own
+  expect(step([["local", "lifetime-d"], ["laptop", null]])).toEqual({ local: "lifetime-d", laptop: "memory.m3" });
+  expect(step([["local", null], ["laptop", null]])).toEqual({ local: "memory.m4", laptop: "memory.m3" });
+  // the earlier unknown owner's text is in none of the later owners' boxes
+  const { store } = device();
+  store.set(composerDraftKey(paneStateOwner("local", "w1:p1", "memory.m1")), "typed while unproven, before C");
+  expect(store.read(composerDraftKey(paneStateOwner("local", "w1:p1", generations.get("local")!.current))).text).toBe("");
+});
+it("held text that reads unreadable stays recoverable", () => {
+  const { data, storage, stores } = device();
+  const now = Date.now();
+  data.set(`herdr-web-ui:terminal-draft:${paneStateOwner("local", "w1:p1", "lifetime-a")}`, JSON.stringify({ text: "unreadable", truncated: false, leftOut: false, at: now }));
+  const [record] = recoverableDrafts(storage, new Map([["local", "lifetime-b"]]), now);
+  expect([record!.text, record!.problem]).toEqual(["unreadable", null]);
+  const current = paneStateOwner("local", "w1:p1", "lifetime-b");
+  expect(recoverDraft(record!, "line", current, false, stores)).toBe("recovered");
+  expect(stores.line.read(current)).toBe("unreadable");
 });
 it("recovery requires explicit destination choice", () => {
   const { data, storage, store, stores } = device();

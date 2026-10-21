@@ -1378,26 +1378,38 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   snapshot's `herdr_lifetime`, a digest of the daemon's socket identity (or the Windows pid:start
   marker). A bridge restart keeps it; a herdr that replaced the last one, and reuses its pane IDs
   for other panes, starts every box and lens empty. A PC whose bridge proves no lifetime (an older
-  bridge, an unreadable socket) keeps what is typed in the page only, never in storage.
+  bridge, an unreadable socket) keeps what is typed in the page only, never in storage, through
+  its reconnects; once a proven lifetime has come between, unknown is a new, empty owner again.
+  What a box holds belongs to one owner: the message box is a new one for a new owner, and a
+  read begun for the last one (a restored send, a suggestion) fills nothing of the new one's.
 - Nothing kept for a pane the app can no longer prove is the same one is put back by itself. The
   pane's menu (a right-click on the pane, the **⋯** of a split pane's head, or a phone's tab menu)
   has **Recover unsent text** (lucide `ArchiveRestore`, before Close pane), which opens a
   `.modal` listing every such record on this device: earlier lifetimes' and those kept before
-  drafts named their herdr. Each `.draft-recovery-row` says its kind (**Message draft**,
-  **Terminal line**, **Held input**) in `--fs-sm` semibold, its PC and pane, where it comes from,
-  and its first line in mono, cut with an ellipsis; the opening pane's own records come first. A
-  lens is not text and is never listed.
-- A picked row (`aria-pressed`, the accent edge and an inset bar, not colour alone) opens its
-  detail under it: the whole text, inert (control characters as their visible symbols) and
+  drafts named their herdr. Each record is a `.draft-recovery-item` card: its `.draft-recovery-row`
+  button says the kind (**Message draft**, **Terminal line**, **Held input**) in semibold, and
+  under it, as selectable text outside the button (on a phone too), its PC and pane, where it
+  comes from, and its first line in mono, cut with an ellipsis; the opening pane's own records
+  come first. A lens is not text and is never listed. Text is `--fs-md` on a desktop; on a phone
+  `--fs-xl` for what is read and `--fs-chat` for what is secondary, as an iPhone's 17 pt body and
+  15 pt footnote.
+- The dialog keeps one height in every state (a card of up to 640 px, a phone's sheet at 92%),
+  so opening a row, a record leaving and the empty list never resize or recenter it; its body is
+  its one scroller, and a long draft is shown whole in it.
+- A picked row (`aria-pressed`, a wash with a check glyph, not colour alone) opens its detail
+  under it, fading in: the whole text, inert (control characters as their visible symbols) and
   selectable, a **Recover into** pair of radios, **Message box** or **Terminal input line**, none
-  picked, and **Discard** beside **Recover**, which stays disabled until a box is picked. Recover
+  picked, and **Discard** beside **Recover**, which stays disabled (outlined, its label in
+  `--text-dim` at full opacity, readable) until a box is picked. Recover
   copies the text into that box of the pane the dialog was opened from and sends nothing; a box
   that already holds text asks first, in place (**Replace** or **Cancel**). A record that cannot be
   read, or is larger than its box ever held, can only be discarded. The record goes with Recover
   or Discard and no other; a `role="status"` line under the introduction says what was done, and
   scrolls into view, since the row it came from is gone.
 - Keyboard: Tab moves through the rows and the detail's controls and stays inside the dialog,
-  Escape closes the confirmation first and then the dialog, and the focus starts on Close. On a
+  Escape closes the confirmation first and then the dialog, and the focus starts on Close. A
+  control that goes hands the focus on: to Cancel when the confirmation opens, back to Recover
+  when it closes, and to the first row (or Close) once a record is recovered or discarded. On a
   touch screen every control is a 44 px target, and a pressed row fills with `--bg-hover` at full
   opacity, as the menu's items do, instead of the dim other buttons take.
 - The design uses Ovis's existing controls only: the pane menu, the modal and its rows, and the

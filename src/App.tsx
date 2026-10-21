@@ -53,7 +53,7 @@ import { formatKeys, shortcutDisplayKeys, useShortcuts } from "./lib/shortcuts.t
 import { useMediaQuery } from "./lib/useMediaQuery.ts";
 import { useAnnouncedText } from "./lib/useAnnouncedText.ts";
 import { PaneLenses } from "./lib/paneLens.ts";
-import { memoryPaneState, PaneLifetimeContext, paneStateOwner } from "./lib/paneState.ts";
+import { memoryPaneState, nextLifetimeGenerations, PaneLifetimeContext, paneStateOwner, type LifetimeGeneration } from "./lib/paneState.ts";
 import { paneContextPress } from "./lib/paneCanvas.ts";
 import type { AppActions, PaneView, PaneControls } from "./lib/actions.ts";
 import {
@@ -257,8 +257,14 @@ export function App() {
   });
   const selectedMachine = machines.find((m) => m.id === selectedMachineId);
   // each PC's herdr lifetime, from its latest snapshot: whose pane drafts and lenses are (lib/paneState.ts)
-  const lifetimeList = JSON.stringify(machines.flatMap((machine) => machine.snapshot?.herdr_lifetime ? [[machine.id, machine.snapshot.herdr_lifetime]] : []));
-  const paneLifetimes = useMemo(() => new Map<string, string>(JSON.parse(lifetimeList) as [string, string][]), [lifetimeList]);
+  // (a snapshot without one: a page-only slot for its continuity generation, lib/paneState.ts)
+  const lifetimeList = JSON.stringify(machines.map((machine) => [machine.id, machine.snapshot ? machine.snapshot.herdr_lifetime ?? null : 0]));
+  const lifetimeGenerations = useRef(new Map<string, LifetimeGeneration>());
+  const paneLifetimes = useMemo(() => {
+    const roster = (JSON.parse(lifetimeList) as [string, string | null | 0][]).map(([id, lifetime]) => [id, lifetime === 0 ? undefined : lifetime] as const);
+    lifetimeGenerations.current = nextLifetimeGenerations(lifetimeGenerations.current, roster);
+    return new Map([...lifetimeGenerations.current].map(([id, generation]) => [id, generation.current]));
+  }, [lifetimeList]);
   const paneLifetimesRef = useRef(paneLifetimes);
   paneLifetimesRef.current = paneLifetimes;
   const snapshot = selectedMachine?.snapshot ?? null;

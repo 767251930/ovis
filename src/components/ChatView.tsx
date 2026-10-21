@@ -55,6 +55,7 @@ import { machinePath, paneStorageId } from "../../shared/machines.ts";
 import { chatRestoreIndex, chatTurnAnchor, readChatPosition, rememberChatPosition, type ChatPosition } from "../lib/chatScrollMemory.ts";
 import { fileUrl } from "../lib/api.ts";
 import { useMachineId } from "../lib/machineContext.tsx";
+import { usePaneStateOwner } from "../lib/paneState.ts";
 import { useSkillMatcher } from "../lib/useSkillMatcher.ts";
 import type { SkillMatcher } from "../lib/skillMentions.ts";
 import { lineDiff } from "../lib/diff.ts";
@@ -1007,7 +1008,14 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
   // is filtered out of the rendered turns (the terminal shows no sent turn for it either)
   const onRestoredRef = useRef(onRestored);
   onRestoredRef.current = onRestored;
-  const [restored, setRestored] = useState<string | null>(null);
+  // It belongs to the pane's owner (lib/paneState.ts) whose read gave it: the same pane ID in a
+  // herdr that replaced the last one holds none of it, from its first render on
+  const stateOwner = usePaneStateOwner(machineId, paneId);
+  const ownerRef = useRef(stateOwner);
+  ownerRef.current = stateOwner;
+  const [restoredFor, setRestoredFor] = useState<{ owner: string; value: string } | null>(null);
+  const restored = restoredFor?.owner === stateOwner ? restoredFor.value : null;
+  const setRestored = useCallback((value: string | null) => setRestoredFor(value === null ? null : { owner: ownerRef.current, value }), []);
   // the pane's tracked command sends, read with the prompt (lib/outcomeChip.ts draws them)
   const [outcomes, setOutcomes] = useState<CommandOutcome[]>([]);
   /** the outcomes whose catalog change this chat has already answered with a fresh command read */
@@ -1363,10 +1371,12 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
     const readPrompt = async (): Promise<void> => {
       // the same prompt keeps its object: the composer and the card only change with it
       const sent = sentKeyRef.current;
+      // a read begun for another herdr behind this pane ID says nothing about this one's screen
+      const owner = ownerRef.current;
       try {
         const next = await fetchPanePromptState(paneId);
         failedReads = 0;
-        if (!cancelled) {
+        if (!cancelled && ownerRef.current === owner) {
           setPromptStale(false);
           setPrompt((current) => current?.id === next.prompt?.id ? current : next.prompt);
           // unchanged outcomes keep their objects: the turns carrying them are not re-rendered
@@ -1387,7 +1397,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
     };
     void readPrompt();
     return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [pollPrompt, paneId, machineId, promptPollKey, promptRefreshKey, fetchPanePromptState, visible]);
+  }, [pollPrompt, paneId, machineId, stateOwner, promptPollKey, promptRefreshKey, fetchPanePromptState, visible, setRestored]);
 
   useEffect(() => {
     onPrompt?.(paneId, prompt);

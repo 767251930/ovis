@@ -45,6 +45,11 @@ const pass = (scenario: string, name: string, detail?: unknown): void => {
  * Over the demo: `window.lifetimes` names each PC's lifetime in every snapshot (null: none, as an
  * older bridge); `window.laptop` adds a PC "laptop" with the same pane IDs; `window.holdAcks` keeps
  * submit-result frames until `window.releaseAcks()`; `window.sentFrames` lists every frame sent.
+ * `window.holdPrompts` keeps GET /api/pane/prompt answers until `window.releasePrompts()`, each with
+ * the `window.promptOverride` fields (suggestion, restored) set when it was asked; `window.holdMachines`
+ * keeps GET /api/machines answers, each the roster as it was when asked, until `window.releaseMachines()`;
+ * `window.dropSockets()` drops every live socket as a lost connection; `window.pushTo(frame)` hands a
+ * server frame to every live socket.
  */
 const control = `<script>(() => {
   const fetchDemo = window.fetch.bind(window), EventSourceDemo = window.EventSource, DemoSocket = window.WebSocket;
@@ -61,6 +66,15 @@ const control = `<script>(() => {
   window.emptyRoster = false;
   window.holdAcks = false;
   window.sentFrames = [];
+  window.promptOverride = null;
+  window.holdPrompts = false;
+  window.promptReads = 0;
+  window.promptAnswers = 0;
+  const heldPrompts = [];
+  window.holdMachines = false;
+  window.machinesHanded = 0;
+  const heldMachines = [];
+  window.socketsOpened = 0;
   const held = [];
   const sockets = new Set();
   const sources = new Set();
@@ -109,10 +123,27 @@ const control = `<script>(() => {
   };
   window.fetch = async (input, init) => {
     const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url, location.href);
-    if (url.pathname === "/api/machines") { const value = await (await fetchDemo(input, init)).json(); last = value.machines; return json({ machines: roster(last) }); }
+    if (url.pathname === "/api/machines") {
+      const value = await (await fetchDemo(input, init)).json(); last = value.machines;
+      // the roster as it stands when asked: a held answer is a read begun before what came after it
+      const body = { machines: roster(last) };
+      if (window.holdMachines) return new Promise((resolve) => heldMachines.push(() => { window.machinesHanded += 1; resolve(json(body)); }));
+      return json(body);
+    }
     const match = url.pathname.match(/^\\/api\\/machines\\/([^/]+)(\\/.*)$/);
     const machine = match ? decodeURIComponent(match[1]) : "local";
     const path = match ? "/api" + match[2] : url.pathname;
+    if (path === "/api/pane/prompt") {
+      const override = window.promptOverride;
+      window.promptReads += 1;
+      const answer = async () => {
+        const value = await (await fetchDemo(path + url.search, init)).json();
+        window.promptAnswers += 1;
+        return json(override ? { ...value, ...override } : value);
+      };
+      if (window.holdPrompts) return new Promise((resolve) => heldPrompts.push(() => resolve(answer())));
+      return answer();
+    }
     if (path === "/api/session") {
       const value = await (await fetchDemo("/api/session" + url.search, init)).json();
       return json({ snapshot: machine === "laptop" ? named({ ...value.snapshot, herdr_lifetime: "demo-herdr-laptop" }, "laptop") : named(value.snapshot, "local") });
@@ -124,6 +155,7 @@ const control = `<script>(() => {
     const socket = new DemoSocket(url, protocols);
     const machine = new URL(url, location.href).searchParams.get("machine_id") ?? "local";
     sockets.add(socket);
+    window.socketsOpened += 1;
     const push = socket.push.bind(socket);
     socket.push = (message) => {
       message = pinFrame(message);
@@ -141,6 +173,16 @@ const control = `<script>(() => {
   window.heldAcks = () => held.length;
   window.releaseAcks = () => { window.holdAcks = false; while (held.length) held.shift()(); };
   window.forceObserve = () => { for (const socket of sockets) socket.push({ type: "role-ack", mode: "observe" }); };
+  window.heldPrompts = () => heldPrompts.length;
+  window.releasePrompts = () => { window.holdPrompts = false; while (heldPrompts.length) heldPrompts.shift()(); };
+  // the oldest held answer alone: every later one stays held
+  window.releaseOldestPrompt = () => { heldPrompts.shift()?.(); };
+  window.heldMachines = () => heldMachines.length;
+  window.releaseMachines = () => { window.holdMachines = false; while (heldMachines.length) heldMachines.shift()(); };
+  window.dropSockets = () => { const live = [...sockets]; sockets.clear(); for (const socket of live) socket.close(1006, "connection lost"); };
+  window.pushTo = (frame) => { for (const socket of sockets) if (socket.readyState === 1) socket.push(frame); };
+  // no frame the demo scheduled (an attach's replayed screen) is still to come on any live socket
+  window.socketsQuiet = () => [...sockets].every((socket) => socket.readyState !== 1 || socket.timers.size === 0);
 })();</script>`;
 
 /** Frames that would reach a pane: input, keys, a submit. */
@@ -184,7 +226,10 @@ async function openRecovery(page: Page): Promise<void> {
   await page.getByRole("dialog", { name: "Recover unsent text" }).waitFor();
 }
 const dialog = (page: Page) => page.getByRole("dialog", { name: "Recover unsent text" });
-const rows = (page: Page) => dialog(page).locator(".draft-recovery-row");
+/** each record's card: its button (the kind) and the text naming it (PC, pane, origin, preview) */
+const rows = (page: Page) => dialog(page).locator(".draft-recovery-item");
+/** picks a record: a press of its card's button */
+const pick = (item: ReturnType<Page["locator"]>): Promise<void> => item.locator(".draft-recovery-row").click();
 async function closeRecovery(page: Page): Promise<void> {
   await dialog(page).getByRole("button", { name: "Close", exact: true }).click();
   await dialog(page).waitFor({ state: "detached" });
@@ -196,8 +241,26 @@ async function newContext(browser: Browser, options: { width: number; phone: boo
   await context.addInitScript((settings) => {
     if (localStorage.getItem("herdr-web-ui:settings") === null) localStorage.setItem("herdr-web-ui:settings", JSON.stringify(settings));
   }, { language: options.language, theme: options.theme, terminalInputMode: "line" });
+  // The demo ends the Claude pane's opening turn on a timer of its own (site/demo/transport.ts):
+  // held here, so no state or frame races it; window.releaseDemoTurn() ends it on purpose.
+  await context.addInitScript(() => {
+    const view = window as unknown as { heldDemoTurns: (() => void)[]; releaseDemoTurn(): void };
+    const later = window.setTimeout.bind(window);
+    view.heldDemoTurns = [];
+    window.setTimeout = ((handler: TimerHandler, delay?: number, ...rest: unknown[]) => {
+      if (typeof handler === "function" && delay === 4500 && (document.currentScript as HTMLScriptElement | null)?.src.endsWith("/demo-transport.js")) {
+        view.heldDemoTurns.push(() => (handler as (...args: unknown[]) => void)(...rest));
+        return 0;
+      }
+      return later(handler, delay, ...rest);
+    }) as typeof window.setTimeout;
+    view.releaseDemoTurn = () => { while (view.heldDemoTurns.length) view.heldDemoTurns.shift()!(); };
+  });
   return context;
 }
+
+/** The demo's opening turn is held on this page: nothing ends by itself while it is checked or captured. */
+const demoTurnHeld = (page: Page): Promise<boolean> => page.evaluate(() => (window as unknown as { heldDemoTurns: unknown[] }).heldDemoTurns.length === 1);
 
 async function happy(browser: Browser, base: string): Promise<void> {
   const S = "restart-isolates-and-recovers";
@@ -208,6 +271,7 @@ async function happy(browser: Browser, base: string): Promise<void> {
     page.on("pageerror", (error) => errors.push(error.message));
     // lifetime A: a message draft, a terminal line and a lens picked by hand
     await openPane(page, base, AGENT);
+    assert.equal(await demoTurnHeld(page), true, "the demo's own turn waits while this is checked");
     await composer(page).fill("A: rename the backup job");
     await valueIs(page, ".composer-text", "A: rename the backup job");
     assert.equal(await stored(page, draftKey(AGENT, A)), "A: rename the backup job");
@@ -254,7 +318,7 @@ async function happy(browser: Browser, base: string): Promise<void> {
     assert.ok(listed[0]!.includes("Message draft") && listed[0]!.includes(AGENT), `this pane's record comes first: ${JSON.stringify(listed)}`);
     assert.ok(listed.some((row) => row.includes("Terminal line") && row.includes("A: make deploy")));
     assert.ok(listed.every((row) => row.includes("From an earlier herdr")));
-    await rows(page).first().click();
+    await pick(rows(page).first());
     const recover = dialog(page).getByRole("button", { name: "Recover", exact: true });
     assert.equal(await recover.isDisabled(), true, "Recover waits for a box to be picked");
     await dialog(page).getByRole("radio", { name: "Message box" }).check();
@@ -268,7 +332,7 @@ async function happy(browser: Browser, base: string): Promise<void> {
     pass(S, "Recover copies A's exact text into B's empty message box after an explicit choice, and sends nothing", { framesBefore });
 
     await openRecovery(page);
-    await rows(page).filter({ hasText: "A: make deploy" }).click();
+    await pick(rows(page).filter({ hasText: "A: make deploy" }));
     await dialog(page).getByRole("button", { name: "Discard", exact: true }).click();
     await dialog(page).getByText("Discarded.").waitFor();
     assert.equal(await rows(page).filter({ hasText: "A: make deploy" }).count(), 0);
@@ -326,10 +390,10 @@ async function failure(browser: Browser, base: string): Promise<void> {
     const listed = await rows(page).allTextContents();
     assert.ok(listed.some((row) => row.includes("legacy message from before lifetimes") && row.includes("From before drafts were kept per herdr")));
     assert.ok(listed.some((row) => row.includes("Held input") && row.includes("held \u241b[2Jclear\u2407")), `held input is inert: ${JSON.stringify(listed)}`);
-    await rows(page).filter({ hasText: "Cannot be read" }).first().click();
+    await pick(rows(page).filter({ hasText: "Cannot be read" }).first());
     assert.equal(await dialog(page).getByRole("button", { name: "Recover", exact: true }).count(), 0, "a broken record can only be discarded");
     await dialog(page).getByText(/cannot be read|Too large/).first().waitFor();
-    await rows(page).filter({ hasText: "legacy message from before lifetimes" }).click();
+    await pick(rows(page).filter({ hasText: "legacy message from before lifetimes" }));
     await dialog(page).getByRole("radio", { name: "Message box" }).check();
     await dialog(page).getByRole("button", { name: "Recover", exact: true }).click();
     await dialog(page).getByText("The message box already holds text. Replace it with this?").waitFor();
@@ -400,7 +464,7 @@ async function failure(browser: Browser, base: string): Promise<void> {
     await lensIs(page, "chat");
     await composer(page).fill("");
     await openRecovery(page);
-    await rows(page).filter({ hasText: "recovered for an observer" }).click();
+    await pick(rows(page).filter({ hasText: "recovered for an observer" }));
     await dialog(page).getByRole("radio", { name: "Message box" }).check();
     await dialog(page).getByRole("button", { name: "Recover", exact: true }).click();
     await closeRecovery(page);
@@ -413,10 +477,188 @@ async function failure(browser: Browser, base: string): Promise<void> {
     assert.equal(await stored(page, draftKey(AGENT, A)), "recovered for an observer", "the recovered text waits in the pane's box");
     pass(S, "an observe connection cannot send recovered text");
 
-    // no secret and no auth token is ever kept with the drafts
-    const values = await page.evaluate(() => Object.entries(localStorage).map(([key, value]) => `${key}=${value.slice(0, 200)}`));
-    assert.ok(values.every((entry) => !/token|secret|password/i.test(entry)), "no secret is persisted");
-    pass(S, "no secret or token is kept in the stored drafts");
+    assert.deepEqual(errors, []);
+  } finally { await context.close(); }
+}
+
+/** Every stored value of this page, local and session storage, for a scan. */
+const everythingStored = (page: Page): Promise<string> => page.evaluate(() => JSON.stringify([{ ...localStorage }, { ...sessionStorage }]));
+/** Waits until one more prompt read has been asked and answered after now: every earlier answer has been taken. */
+async function promptReadsSettled(page: Page): Promise<void> {
+  const asked = await page.evaluate(() => (window as unknown as { promptReads: number }).promptReads);
+  await page.waitForFunction((before) => {
+    const view = window as unknown as { promptReads: number; promptAnswers: number };
+    return view.promptReads > before && view.promptAnswers >= view.promptReads;
+  }, asked, { timeout: 15_000 });
+}
+/** Marks the message box element, so its replacement by a new one can be awaited. */
+const markComposer = (page: Page, mark: string): Promise<void> => page.evaluate((value) => { document.querySelector<HTMLElement>(".composer-text")!.dataset.lifetimeMark = value; }, mark);
+const composerRemounted = (page: Page, mark: string): Promise<unknown> => page.waitForFunction((value) => {
+  const box = document.querySelector<HTMLElement>(".composer-text");
+  return box !== null && box.dataset.lifetimeMark !== value;
+}, mark, { timeout: 10_000 });
+const publishLifetime = (page: Page, lifetime: string | null): Promise<void> => page.evaluate((value) => {
+  const view = window as unknown as { lifetimes: Record<string, string | null>; emitRoster(): void };
+  view.lifetimes = { local: value };
+  view.emitRoster();
+}, lifetime);
+
+/**
+ * The same pane in the same lens across a replacement, so nothing remounts with the lens: a
+ * restoration read begun for A and answered after B, B's suggestion, a snapshot read begun before
+ * B and answered after it, an unknown owner after a proven one, a connection lost mid-send, and a
+ * secret typed at a password prompt.
+ */
+async function mounted(browser: Browser, base: string): Promise<void> {
+  const S = "ambiguous-and-late-drafts";
+  const context = await newContext(browser, { width: 1440, phone: false, theme: "dark", language: "en" });
+  try {
+    const IDLE = panes.omp;
+    const C = "demo-herdr-local-third";
+    const D = "demo-herdr-local-fourth";
+    const page = await context.newPage();
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await page.goto(`${base}?pane=${encodeURIComponent(IDLE)}`);
+    // the pane is in the chat in every lifetime here, so the lens never remounts the box for this check
+    await page.evaluate(([pane, lifetimes]) => {
+      sessionStorage.setItem("pane-lifetime-test:pinned", JSON.stringify({ [pane!]: "idle" }));
+      for (const lifetime of lifetimes as string[]) localStorage.setItem(`herdr-web-ui:view:${lifetime}`, "chat");
+    }, [IDLE, [owner(IDLE, A), owner(IDLE, B), owner(IDLE, C), owner(IDLE, D)]] as const);
+    await restartBridge(page, null, IDLE, base);
+    assert.equal(await demoTurnHeld(page), true);
+    await lensIs(page, "chat");
+    await composer(page).fill("A: unsent");
+    await valueIs(page, ".composer-text", "A: unsent");
+    await composer(page).fill("");
+    await valueIs(page, ".composer-text", "");
+
+    // 1. a restoration read begun under A, answered once B is current, with A's restored send
+    await page.evaluate(() => { const view = window as unknown as { promptOverride: unknown; holdPrompts: boolean }; view.promptOverride = { restored: "A: restored send" }; view.holdPrompts = true; });
+    await page.waitForFunction(() => (window as unknown as { heldPrompts(): number }).heldPrompts() >= 1, undefined, { timeout: 15_000 });
+    await page.evaluate(() => { (window as unknown as { promptOverride: unknown }).promptOverride = null; });
+    await markComposer(page, "A");
+    await publishLifetime(page, B);
+    await composerRemounted(page, "A");
+    await lensIs(page, "chat");
+    // A's answer alone, B's own reads still held: nothing of B's can clear what A's would fill
+    const answered = await page.evaluate(() => (window as unknown as { promptAnswers: number }).promptAnswers);
+    await page.evaluate(() => (window as unknown as { releaseOldestPrompt(): void }).releaseOldestPrompt());
+    await page.waitForFunction((before) => (window as unknown as { promptAnswers: number }).promptAnswers > before, answered, { timeout: 10_000 });
+    // the page has taken that answer and drawn what follows from it: two frames on
+    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    assert.equal(await composer(page).inputValue(), "", "A's restored send never fills B's box");
+    assert.equal(await stored(page, draftKey(IDLE, B)), null, "nor is it stored as B's draft");
+    await page.evaluate(() => (window as unknown as { releasePrompts(): void }).releasePrompts());
+    await promptReadsSettled(page);
+    assert.equal(await composer(page).inputValue(), "");
+    assert.equal(await stored(page, draftKey(IDLE, B)), null);
+    pass(S, "a restoration read begun for lifetime A and answered after B mounts fills and stores nothing of B's");
+
+    // 2. B's suggestion, taken with Tab in the box that stayed in the chat, is B's alone
+    await publishLifetime(page, A);
+    await lensIs(page, "chat");
+    await composer(page).fill("A: unsent");
+    await valueIs(page, ".composer-text", "A: unsent");
+    await markComposer(page, "A");
+    await publishLifetime(page, B);
+    await composerRemounted(page, "A");
+    await page.evaluate(() => { (window as unknown as { promptOverride: unknown }).promptOverride = { suggestion: "B-only suggestion" }; });
+    await page.waitForFunction(() => document.querySelector<HTMLTextAreaElement>(".composer-text")?.placeholder === "B-only suggestion", undefined, { timeout: 15_000 });
+    await composer(page).focus();
+    await page.keyboard.press("Tab");
+    await valueIs(page, ".composer-text", "B-only suggestion");
+    assert.equal(await stored(page, draftKey(IDLE, B)), "B-only suggestion");
+    assert.equal(await stored(page, draftKey(IDLE, A)), "A: unsent", "A's unsent text is untouched");
+    await page.evaluate(() => { (window as unknown as { promptOverride: unknown }).promptOverride = null; });
+    await composer(page).fill("");
+    pass(S, "with the chat kept mounted, B's suggestion goes into B's box and A's saved draft stays as it was");
+
+    // 3. a snapshot read begun under B, answered after a replacement C arrived: C stays current
+    await page.evaluate(() => { (window as unknown as { holdMachines: boolean }).holdMachines = true; document.dispatchEvent(new Event("visibilitychange")); });
+    await page.waitForFunction(() => (window as unknown as { heldMachines(): number }).heldMachines() >= 1, undefined, { timeout: 15_000 });
+    await page.evaluate(([key]) => localStorage.setItem(key!, "B: kept for B"), [draftKey(IDLE, B)]);
+    await markComposer(page, "B");
+    await publishLifetime(page, C);
+    await composerRemounted(page, "B");
+    await valueIs(page, ".composer-text", "");
+    const handed = await page.evaluate(() => (window as unknown as { machinesHanded: number }).machinesHanded);
+    await page.evaluate(() => (window as unknown as { releaseMachines(): void }).releaseMachines());
+    await page.waitForFunction((before) => (window as unknown as { machinesHanded: number }).machinesHanded > before, handed, { timeout: 10_000 });
+    await composer(page).fill("C: typed after the late read");
+    await valueIs(page, ".composer-text", "C: typed after the late read");
+    assert.equal(await stored(page, draftKey(IDLE, C)), "C: typed after the late read", "the late read did not bring B back");
+    assert.equal(await stored(page, draftKey(IDLE, B)), "B: kept for B");
+    await composer(page).fill("");
+    pass(S, "a snapshot read begun before a replacement and answered after it leaves the replacement's owner current");
+
+    // 4. unknown, then a proven replacement, then unknown again: the earlier unknown owner's text stays away
+    // an unproven pane remembers no lens: the desktop default, then the chat again by hand
+    await publishLifetime(page, null);
+    await lensIs(page, "terminal");
+    await page.locator("button[title^='Chat transcript']").first().click();
+    await lensIs(page, "chat");
+    await valueIs(page, ".composer-text", "");
+    await composer(page).fill("U: typed while unproven");
+    await valueIs(page, ".composer-text", "U: typed while unproven");
+    // a lost connection is not a new herdr: the same unknown owner, its text kept, nothing sent by itself
+    const opened = await page.evaluate(() => (window as unknown as { socketsOpened: number }).socketsOpened);
+    const before = await inputFrames(page);
+    await page.evaluate(() => (window as unknown as { dropSockets(): void }).dropSockets());
+    await page.waitForFunction((count) => (window as unknown as { socketsOpened: number }).socketsOpened > count, opened, { timeout: 30_000 });
+    await page.locator(".conn-live").waitFor({ state: "attached", timeout: 30_000 });
+    await valueIs(page, ".composer-text", "U: typed while unproven");
+    assert.equal(await inputFrames(page), before, "nothing typed is sent after a reconnect");
+    await markComposer(page, "U");
+    await publishLifetime(page, D);
+    await composerRemounted(page, "U");
+    await valueIs(page, ".composer-text", "");
+    await publishLifetime(page, null);
+    await lensIs(page, "terminal");
+    await page.locator("button[title^='Chat transcript']").first().click();
+    await lensIs(page, "chat");
+    await valueIs(page, ".composer-text", "");
+    assert.equal((await everythingStored(page)).includes("U: typed while unproven"), false, "an unproven owner's text is never stored");
+    pass(S, "an unknown owner keeps its text through a reconnect, and after a proven replacement unknown is a new, empty owner");
+
+    // 5. a connection lost mid-send: the text waits, nothing is replayed after the reconnect
+    await publishLifetime(page, A);
+    await lensIs(page, "chat");
+    await composer(page).fill("A: sent as the line dropped");
+    await valueIs(page, ".composer-text", "A: sent as the line dropped");
+    await page.evaluate(() => { (window as unknown as { holdAcks: boolean }).holdAcks = true; });
+    const submits = (): Promise<number> => page.evaluate(() => (window as unknown as { sentFrames: { type: string; text?: string }[] }).sentFrames
+      .filter((frame) => frame.type === "submit" && JSON.stringify(frame).includes("A: sent as the line dropped")).length);
+    await page.getByRole("button", { name: "Send message" }).click();
+    await page.waitForFunction(() => (window as unknown as { heldAcks(): number }).heldAcks() === 1, undefined, { timeout: 10_000 });
+    assert.equal(await submits(), 1);
+    const reopened = await page.evaluate(() => (window as unknown as { socketsOpened: number }).socketsOpened);
+    await page.evaluate(() => (window as unknown as { dropSockets(): void }).dropSockets());
+    await page.waitForFunction((count) => (window as unknown as { socketsOpened: number }).socketsOpened > count, reopened, { timeout: 30_000 });
+    await page.locator(".conn-live").waitFor({ state: "attached", timeout: 30_000 });
+    // the send was never confirmed: the text stays with A, for the user to check and send again
+    await page.waitForFunction((key) => localStorage.getItem(key) === "A: sent as the line dropped", draftKey(IDLE, A), { timeout: 10_000 });
+    await promptReadsSettled(page);
+    assert.equal(await submits(), 1, "the unconfirmed send is not replayed after the reconnect");
+    await page.evaluate(() => { (window as unknown as { holdAcks: boolean }).holdAcks = false; });
+    pass(S, "a connection lost mid-send keeps the text under its owner and replays nothing after the reconnect");
+
+    // 6. a secret typed at a password prompt stays in its masked field: no draft, no storage
+    await openPane(page, base, SHELL);
+    await lensIs(page, "terminal");
+    // the demo's replay of the shell's screen has landed: the prompt below is the last thing on it
+    await page.waitForFunction(() => (window as unknown as { socketsQuiet(): boolean }).socketsQuiet(), undefined, { timeout: 30_000 });
+    await page.evaluate((pane) => (window as unknown as { pushTo(frame: unknown): void }).pushTo({ type: "pty-data", pane_id: pane, data: "\r\n[sudo] password for demo: " }), SHELL);
+    const field = page.locator(".secret-input input");
+    await field.waitFor({ timeout: 10_000 });
+    await field.fill("pane-lifetime-secret-9f2");
+    await page.waitForFunction(() => document.querySelector<HTMLInputElement>(".secret-input input")?.value === "pane-lifetime-secret-9f2");
+    assert.equal((await everythingStored(page)).includes("pane-lifetime-secret-9f2"), false, "no secret is stored");
+    await publishLifetime(page, B);
+    await page.waitForFunction(() => document.querySelector(".secret-input input") !== null || document.querySelector(".terminal-input-text") !== null, undefined, { timeout: 10_000 });
+    assert.equal((await everythingStored(page)).includes("pane-lifetime-secret-9f2"), false, "nor after a replacement");
+    assert.equal(await page.locator("body").innerText().then((text) => text.includes("pane-lifetime-secret-9f2")), false);
+    pass(S, "a secret typed at a password prompt is never kept with the drafts, before or after a replacement");
     assert.deepEqual(errors, []);
   } finally { await context.close(); }
 }
@@ -452,12 +694,15 @@ async function captures(browser: Browser, base: string, dir: string): Promise<vo
       const name = (state: string): string => join(dir, `pane-recovery-${variant.width}-${variant.theme}${variant.language === "ko" ? "-ko" : ""}-${state}.png`);
       const shot = async (state: string): Promise<void> => { await page.screenshot({ path: name(state), animations: "disabled", caret: "hide" }); };
       await page.goto(`${base}?pane=${encodeURIComponent(AGENT)}`);
+      const box = page.locator(".draft-recovery");
+      const card = (text: string) => box.locator(".draft-recovery-item").filter({ hasText: text }).locator(".draft-recovery-row");
       // a second PC with the same pane IDs, named long, in every roster from here on
       await page.evaluate(() => sessionStorage.setItem("pane-lifetime-test:laptop", JSON.stringify({ name: "Laptop · a long PC name that wraps", state: "connected" })));
       // the same herdr after a bridge restart: the draft kept under its lifetime
       await openPane(page, base, AGENT);
       await page.locator(".composer-text").waitFor();
       await valueIs(page, ".composer-text", "Rename the backup job and rerun it");
+      assert.equal(await demoTurnHeld(page), true, "the demo's own turn waits through the captures");
       if (variant.language === "en") await shot("retained");
       // a replacement herdr: the same pane, an empty box, nothing filled in
       await restartBridge(page, { local: B }, AGENT, base);
@@ -479,7 +724,6 @@ async function captures(browser: Browser, base: string, dir: string): Promise<vo
         await shot("menu");
         await page.getByRole("menuitem", { name: "Recover unsent text" }).click();
       }
-      const box = page.locator(".draft-recovery");
       await box.waitFor();
       // the menu's own sheet gone, and its last frame too, which slides out in an inert host of its own
       // at the end of <body> (lib/sheets.ts): the dialog alone over the pane
@@ -500,8 +744,8 @@ async function captures(browser: Browser, base: string, dir: string): Promise<vo
       const first = box.locator(".draft-recovery-row").first();
       const rect = await first.boundingBox();
       if (rect) { await page.mouse.move(rect.x + rect.width / 2, rect.y + rect.height / 2); await page.mouse.down(); await shot("pressed"); await page.mouse.up(); }
-      await box.locator(".draft-recovery-row").filter({ hasText: "Rename the backup job" }).waitFor();
-      if (await box.locator(".draft-recovery-row[aria-pressed='true']").count() === 0) await box.locator(".draft-recovery-row").filter({ hasText: "Rename the backup job" }).click();
+      await card("Rename the backup job").waitFor();
+      if (await box.locator(".draft-recovery-row[aria-pressed='true']").count() === 0) await card("Rename the backup job").click();
       await box.locator(".draft-recovery-detail").waitFor();
       await shot("detail-disabled");
       await box.getByRole("radio").first().check();
@@ -511,9 +755,9 @@ async function captures(browser: Browser, base: string, dir: string): Promise<vo
       await box.locator(".draft-recovery-confirm .btn-danger").click();
       await box.locator(".draft-recovery-note").filter({ hasText: /./ }).waitFor();
       await shot("recovered");
-      await box.locator(".draft-recovery-row").filter({ hasText: "unbroken-path" }).click();
+      await card("unbroken-path").click();
       await shot("long");
-      await box.locator(".draft-recovery-row .is-problem").first().click();
+      await box.locator(".draft-recovery-item:has(.is-problem) .draft-recovery-row").first().click();
       await box.locator(".draft-recovery-problem").waitFor();
       await shot("error");
       await box.locator(".draft-recovery-actions .btn-danger").click();
@@ -565,6 +809,7 @@ try {
     try {
       await happy(browser, base);
       await failure(browser, base);
+      await mounted(browser, base);
       if (evidence) await captures(browser, base, evidence);
     } finally { await browser.close(); }
   } finally { server.stop(); }

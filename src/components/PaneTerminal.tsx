@@ -508,19 +508,23 @@ export function PaneTerminal({
   const [chatPrompt, setChatPrompt] = useState<{ pane: string; value: InteractivePrompt } | null>(null);
   const [promptRefresh, setPromptRefresh] = useState(0);
   // what the agent suggests typing next (Claude's grey input text), for the composer's placeholder
-  const [chatSuggestion, setChatSuggestion] = useState<{ pane: string; value: string } | null>(null);
+  // Both name the pane's owner (lib/paneState.ts) at the time of the read that gave them: the same
+  // pane ID in a herdr that replaced the last one shows neither from its first render on
+  const [chatSuggestion, setChatSuggestion] = useState<{ pane: string; owner: string; value: string } | null>(null);
   const onChatSuggestion = useCallback((pane: string, value: string | null) => {
+    const owner = paneStateOwner(machineId, pane, lifetimeRef.current);
     setChatSuggestion((current) => value !== null
-      ? (current?.pane === pane && current.value === value ? current : { pane, value })
+      ? (current?.owner === owner && current.value === value ? current : { pane, owner, value })
       : current?.pane === pane ? null : current);
-  }, []);
+  }, [machineId]);
   // a cancelled send the agent put back in its input box, for the composer to take again
-  const [chatRestored, setChatRestored] = useState<{ pane: string; value: string } | null>(null);
+  const [chatRestored, setChatRestored] = useState<{ pane: string; owner: string; value: string } | null>(null);
   const onChatRestored = useCallback((pane: string, value: string | null) => {
+    const owner = paneStateOwner(machineId, pane, lifetimeRef.current);
     setChatRestored((current) => value !== null
-      ? (current?.pane === pane && current.value === value ? current : { pane, value })
+      ? (current?.owner === owner && current.value === value ? current : { pane, owner, value })
       : current?.pane === pane ? null : current);
-  }, []);
+  }, [machineId]);
   // a typed pick of an approval's option, shown in the card until Confirm or Cancel
   const [pendingAnswer, setPendingAnswer] = useState<{ pane: string; promptId: string; answer: TypedAnswer } | null>(null);
   // where the chat draws its prompt card: on the composer's column, between the held messages and
@@ -3216,7 +3220,8 @@ export function PaneTerminal({
           the input surface (key bar included), so a second box would only duplicate it */}
       {presented && paneId !== null && chatView && !secretActive && !observing && !ended && (
         <Composer
-          key={paneId}
+          // a new owner is a new box: its callbacks, attachments and fill all belong to one draft
+          key={stateOwner}
           paneId={paneId}
           cwd={cwd}
           branch={branchWord === DETACHED ? t("Detached HEAD") : branchWord}
@@ -3234,8 +3239,8 @@ export function PaneTerminal({
           answerHint={answering === null ? null
             : pendingAnswer?.promptId === answering.id ? t("Confirm your answer in the card above, or type another…") : answerHint(answering)}
           // no suggestion under any card, a fallback or queued one included
-          suggestion={chatPrompt?.pane !== paneId && chatSuggestion?.pane === paneId ? chatSuggestion.value : null}
-          restored={chatPrompt?.pane !== paneId && chatRestored?.pane === paneId ? chatRestored.value : null}
+          suggestion={chatPrompt?.pane !== paneId && chatSuggestion?.owner === stateOwner ? chatSuggestion.value : null}
+          restored={chatPrompt?.pane !== paneId && chatRestored?.owner === stateOwner ? chatRestored.value : null}
           notices={composerNotices}
           role={observing ? "observe" : role}
           onOpenHistory={historyOffered ? onOpenHistory : undefined}

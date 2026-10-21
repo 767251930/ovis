@@ -7,6 +7,7 @@
  */
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { Check } from "lucide-react";
 
 import "./DraftRecovery.css";
 
@@ -47,13 +48,19 @@ export function DraftRecovery({ machineId, paneId, machines, lifetimes, onClose 
   const detail = useRef<HTMLElement>(null);
   const confirmation = useRef<HTMLDivElement>(null);
   const noteLine = useRef<HTMLParagraphElement>(null);
+  const list = useRef<HTMLUListElement>(null);
+  /**
+   * where the keyboard goes once the control it was on is gone: Cancel when the confirmation
+   * opens, Recover when it closes, the first row (or Close) once a record leaves the list
+   */
+  const [refocus, setRefocus] = useState<"cancel" | "recover" | "list" | null>(null);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
       if (event.key !== "Escape" || nativeModalOver(surface.current)) return;
       event.stopPropagation();
       event.preventDefault();
-      if (confirming) setConfirming(false);
+      if (confirming) { setConfirming(false); setRefocus("recover"); }
       else onClose();
     };
     window.addEventListener("keydown", onKey, true);
@@ -62,6 +69,15 @@ export function DraftRecovery({ machineId, paneId, machines, lifetimes, onClose 
   useEffect(() => { if (selected !== null) detail.current?.scrollIntoView({ block: "nearest" }); }, [selected]);
   useEffect(() => { if (confirming) confirmation.current?.scrollIntoView({ block: "nearest" }); }, [confirming]);
   useEffect(() => { if (note !== null) noteLine.current?.scrollIntoView({ block: "nearest" }); }, [note]);
+  useEffect(() => {
+    if (refocus === null) return;
+    setRefocus(null);
+    const root = surface.current;
+    const target = refocus === "cancel" ? root?.querySelector<HTMLElement>(".draft-recovery-confirm .btn:not(.btn-danger)")
+      : refocus === "recover" ? detail.current?.querySelector<HTMLElement>(".btn-primary")
+      : list.current?.querySelector<HTMLElement>(".draft-recovery-row") ?? closeButton.current;
+    target?.focus({ preventScroll: true });
+  }, [refocus, surface]);
 
   const sourceLabel = (source: RecoverySource): string =>
     source === "message" ? t("Message draft") : source === "line" ? t("Terminal line") : t("Held input");
@@ -79,13 +95,14 @@ export function DraftRecovery({ machineId, paneId, machines, lifetimes, onClose 
   const recover = (replace: boolean): void => {
     if (!record) return;
     const outcome = recoverDraft(record, destination, paneStateOwner(machineId, paneId, lifetimes.get(machineId)), replace);
-    if (outcome === "confirm_replace") { setConfirming(true); return; }
+    if (outcome === "confirm_replace") { setConfirming(true); setRefocus("cancel"); return; }
     setConfirming(false);
     if (outcome === "too_long") { setNote(t("Too long for this box. Choose the other one, or discard it.")); return; }
     if (outcome !== "recovered") return;
     setNote(destination === "message" ? t("Recovered into the message box. Nothing was sent.") : t("Recovered into the terminal input line. Nothing was sent."));
     setSelected(null);
     setRevision((count) => count + 1);
+    setRefocus("list");
   };
   const discard = (): void => {
     if (!record) return;
@@ -94,6 +111,7 @@ export function DraftRecovery({ machineId, paneId, machines, lifetimes, onClose 
     setConfirming(false);
     setNote(t("Discarded."));
     setRevision((count) => count + 1);
+    setRefocus("list");
   };
 
   // the picked record opens under its own row, so what is recovered stays beside where it came from
@@ -118,7 +136,7 @@ export function DraftRecovery({ machineId, paneId, machines, lifetimes, onClose 
         <div ref={confirmation} className="draft-recovery-confirm" role="group" aria-labelledby={`${id}-confirm`}>
           <p id={`${id}-confirm`}>{destination === "message" ? t("The message box already holds text. Replace it with this?") : t("The terminal input line already holds text. Replace it with this?")}</p>
           <div className="draft-recovery-actions">
-            <button type="button" className="btn" onClick={() => setConfirming(false)}>{t("Cancel")}</button>
+            <button type="button" className="btn" onClick={() => { setConfirming(false); setRefocus("recover"); }}>{t("Cancel")}</button>
             <button type="button" className="btn btn-danger" onClick={() => recover(true)}>{t("Replace")}</button>
           </div>
         </div>
@@ -142,17 +160,22 @@ export function DraftRecovery({ machineId, paneId, machines, lifetimes, onClose 
           <p ref={noteLine} className="draft-recovery-note" role="status">{note}</p>
           {records.length === 0
             ? <p className="draft-recovery-empty">{t("No earlier unsent text on this device.")}</p>
-            : <ul className="draft-recovery-list" aria-label={t("Recover unsent text")}>
-              {records.map((item) => (
-                <li key={item.key}>
-                  <button type="button" className="draft-recovery-row" aria-pressed={item.key === selected} aria-expanded={item.key === selected} onClick={() => pick(item.key)}>
-                    <span className="draft-recovery-row-head">
-                      <span className="draft-recovery-kind">{sourceLabel(item.source)}</span>
-                      <span className="draft-recovery-place">{place(item)}</span>
-                    </span>
+            : <ul ref={list} className="draft-recovery-list" aria-label={t("Recover unsent text")}>
+              {records.map((item, index) => (
+                <li key={item.key} className={`draft-recovery-item${item.key === selected ? " is-picked" : ""}`}>
+                  {/* the row's button picks it; what it names (PC, pane, where it came from) is text
+                      beside it, which can be selected and copied as any other text */}
+                  <button type="button" className="draft-recovery-row" aria-pressed={item.key === selected} aria-expanded={item.key === selected}
+                    aria-describedby={`${id}-meta-${index}`} onClick={() => pick(item.key)}>
+                    <span className="draft-recovery-kind">{sourceLabel(item.source)}</span>
+                    {/* picked: a check, with the wash, never the colour alone */}
+                    <span className="draft-recovery-mark" aria-hidden="true">{item.key === selected && <Check />}</span>
+                  </button>
+                  <div className="draft-recovery-meta" id={`${id}-meta-${index}`}>
+                    <span className="draft-recovery-place">{place(item)}</span>
                     <span className="draft-recovery-origin">{origin(item)}</span>
                     <span className={`draft-recovery-preview${item.problem ? " is-problem" : ""}`}>{item.problem === null ? item.text : t("Cannot be read")}</span>
-                  </button>
+                  </div>
                   {item.key === selected && detailOf(item)}
                 </li>
               ))}
