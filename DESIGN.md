@@ -1394,7 +1394,8 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   copies the text into that box of the pane the dialog was opened from and sends nothing; a box
   that already holds text asks first, in place (**Replace** or **Cancel**). A record that cannot be
   read, or is larger than its box ever held, can only be discarded. The record goes with Recover
-  or Discard and no other; a `role="status"` line says what was done.
+  or Discard and no other; a `role="status"` line under the introduction says what was done, and
+  scrolls into view, since the row it came from is gone.
 - Keyboard: Tab moves through the rows and the detail's controls and stays inside the dialog,
   Escape closes the confirmation first and then the dialog, and the focus starts on Close. On a
   touch screen every control is a 44 px target, and a pressed row fills with `--bg-hover` at full

@@ -46,6 +46,7 @@ export function DraftRecovery({ machineId, paneId, machines, lifetimes, onClose 
   const [note, setNote] = useState<string | null>(null);
   const detail = useRef<HTMLElement>(null);
   const confirmation = useRef<HTMLDivElement>(null);
+  const noteLine = useRef<HTMLParagraphElement>(null);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
@@ -60,6 +61,7 @@ export function DraftRecovery({ machineId, paneId, machines, lifetimes, onClose 
   }, [confirming, onClose]);
   useEffect(() => { if (selected !== null) detail.current?.scrollIntoView({ block: "nearest" }); }, [selected]);
   useEffect(() => { if (confirming) confirmation.current?.scrollIntoView({ block: "nearest" }); }, [confirming]);
+  useEffect(() => { if (note !== null) noteLine.current?.scrollIntoView({ block: "nearest" }); }, [note]);
 
   const sourceLabel = (source: RecoverySource): string =>
     source === "message" ? t("Message draft") : source === "line" ? t("Terminal line") : t("Held input");
@@ -136,6 +138,8 @@ export function DraftRecovery({ machineId, paneId, machines, lifetimes, onClose 
         <header className="modal-header"><h2 className="modal-title" id={`${id}-title`}>{t("Recover unsent text")}</h2></header>
         <div className="modal-body draft-recovery-body">
           <p className="draft-recovery-intro" id={`${id}-intro`}>{t("Text this device kept for a pane it can no longer tell apart from a new one: typed under an earlier herdr, or before drafts were kept per herdr. Nothing is filled in or sent until you choose.")}</p>
+          {/* what was just done, where the eye returns after the row it came from goes */}
+          <p ref={noteLine} className="draft-recovery-note" role="status">{note}</p>
           {records.length === 0
             ? <p className="draft-recovery-empty">{t("No earlier unsent text on this device.")}</p>
             : <ul className="draft-recovery-list" aria-label={t("Recover unsent text")}>
@@ -153,7 +157,6 @@ export function DraftRecovery({ machineId, paneId, machines, lifetimes, onClose 
                 </li>
               ))}
             </ul>}
-          <p className="draft-recovery-note" role="status">{note}</p>
         </div>
         <footer className="modal-footer">
           <button ref={closeButton} type="button" className="btn" onClick={onClose}>{t("Close")}</button>
