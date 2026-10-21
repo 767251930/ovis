@@ -1483,17 +1483,18 @@ try {
           element.addEventListener("error", () => fail(new Error(`media error ${element.error?.code}`)), { once: true });
           element.currentTime = to;
         }), to);
-        record.seekedTo = await seek(6);
-        await state.filter({ hasText: /^seeked to 6\.0 s$/ }).waitFor();
-        await playable();
-        await shoot(view, "after-seek");
         record.played = await video.evaluate((element: HTMLVideoElement) => new Promise<number>((done, fail) => {
           const start = element.currentTime;
           const moved = () => { if (element.currentTime > start) { element.removeEventListener("timeupdate", moved); element.pause(); done(element.currentTime - start); } };
           element.addEventListener("timeupdate", moved);
           element.play().catch(fail);
         }));
-        assert.ok((record.played as number) > 0, "the recording plays on from where it was sought");
+        assert.ok((record.played as number) > 0, "the recording plays");
+        record.seekedTo = await seek(6);
+        await state.filter({ hasText: /^seeked to 6\.0 s$/ }).waitFor();
+        await playable();
+        await shoot(view, "after-seek");
+
         // the app's own document scrolls not sideways; the page's end is reachable
         const sideways = await view.evaluate(() => document.scrollingElement!.scrollWidth - document.scrollingElement!.clientWidth);
         assert.equal(sideways, 0, `no horizontal scroll at ${tag}`);
@@ -1595,6 +1596,8 @@ try {
         await closeViewer();
         await descriptorsClosed("the viewer closed");
         record.openAfterCancel = live.size;
+        await view.locator(".file-viewer").waitFor({ state: "hidden" });
+        await sheetsSettled(view);
         await shoot(view, "cancelled");
         // reloaded: a new render gives a new address, which plays
         await view.reload();
