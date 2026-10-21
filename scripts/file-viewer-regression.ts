@@ -1597,7 +1597,8 @@ try {
         await descriptorsClosed("the viewer closed");
         record.openAfterCancel = live.size;
         await view.locator(".file-viewer").waitFor({ state: "hidden" });
-        await sheetsSettled(view);
+        // a closed sheet's drop is drawn in an inert host of its own until it has slid out (src/lib/sheets.ts)
+        await view.waitForFunction(() => document.body.querySelector(":scope > div[inert][aria-hidden='true']") === null);
         await shoot(view, "cancelled");
         // reloaded: a new render gives a new address, which plays
         await view.reload();
