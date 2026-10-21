@@ -480,9 +480,27 @@ try {
         await noOverflow("offline");
         await shot("offline");
         await measure("offline");
+        // the terminal's input line, itself unchanged: the same framing, and the same refusal kept under the line
+        await page.evaluate(() => {
+          const settings = JSON.parse(localStorage.getItem("herdr-web-ui:settings") ?? "{}");
+          localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ ...settings, terminalInputMode: "line" }));
+        });
+        await page.goto(`${url}&view=terminal`);
+        await page.locator(".conn-live").waitFor({ state: "attached" });
+        const line = page.locator(".terminal-input-text");
+        await line.waitFor();
+        await line.fill(written);
+        await noOverflow("terminal-line");
+        await shot("terminal-line");
+        await line.fill(refused);
+        await page.locator(".terminal-input-send").click();
+        await page.locator(".terminal-input-note").filter({ hasText: "paste markers" }).waitFor();
+        assert.equal(await line.inputValue(), refused, "the refused line stays as it was");
+        await noOverflow("terminal-line-error");
+        await shot("terminal-line-error");
       });
       if (process.env.UI_EVIDENCE_DIR) writeFileSync(join(process.env.UI_EVIDENCE_DIR, "submit-framing-measurements.json"), `${JSON.stringify(framingMeasures, null, 2)}\n`);
-      console.log("PASS immediate submit framing: a pasted marker is dropped, any other escape is refused with the draft kept, and observe-only and offline keep their guards, on phone and desktop in both themes and Korean");
+      console.log("PASS immediate submit framing: a pasted marker is dropped, any other escape is refused with the draft kept, observe-only and offline keep their guards, and the terminal input line refuses the same, on phone and desktop in both themes and Korean");
 
       // Only the transport receipt is held: the real composer and draft lifecycle stay intact.
       for (const agent of ["claude", "codex"] as const) for (const width of [390, 1440]) for (const theme of ["dark", "light"] as const) await withCard(browser, width, { agent, model: agent === "claude" ? "claude-opus-5-5" : "gpt-5.6", status: "idle" }, async (page) => {
