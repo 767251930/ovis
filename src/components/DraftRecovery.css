@@ -197,6 +197,15 @@
   display: none;
 }
 
+/* a finger's press fills the row, as an iPhone list row and the menu's items do, at full opacity
+   rather than the dim other buttons take (styles.css) */
+@media (hover: none) and (pointer: coarse) {
+  .draft-recovery-row:active {
+    opacity: 1;
+    background: var(--bg-hover);
+  }
+}
+
 /* a finger's target on every control of the dialog */
 @media (pointer: coarse) {
   .draft-recovery .btn,

@@ -481,8 +481,9 @@ async function captures(browser: Browser, base: string, dir: string): Promise<vo
       }
       const box = page.locator(".draft-recovery");
       await box.waitFor();
-      // the menu's own sheet gone: the dialog alone over the pane
-      await page.waitForFunction(() => document.querySelectorAll(".modal-scrim").length === 1, undefined, { timeout: 10_000 });
+      // the menu's own sheet gone, and its last frame too, which slides out in an inert host of its own
+      // at the end of <body> (lib/sheets.ts): the dialog alone over the pane
+      await page.waitForFunction(() => document.querySelectorAll(".modal-scrim").length === 1 && document.querySelector("body > div[inert][aria-hidden='true']") === null, undefined, { timeout: 10_000 });
       await shot("list");
       const body = box.locator(".modal-body");
       await body.evaluate((node) => { node.scrollTop = node.scrollHeight; });

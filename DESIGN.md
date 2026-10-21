@@ -1397,7 +1397,8 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   or Discard and no other; a `role="status"` line says what was done.
 - Keyboard: Tab moves through the rows and the detail's controls and stays inside the dialog,
   Escape closes the confirmation first and then the dialog, and the focus starts on Close. On a
-  touch screen every control is a 44 px target.
+  touch screen every control is a 44 px target, and a pressed row fills with `--bg-hover` at full
+  opacity, as the menu's items do, instead of the dim other buttons take.
 - The design uses Ovis's existing controls only: the pane menu, the modal and its rows, and the
   message box and terminal input line the text goes back into. It differs from Agent of Empires
   (AoE), whose web client deletes the drafts of sessions missing from its active set: herdr owns
