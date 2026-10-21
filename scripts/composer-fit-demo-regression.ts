@@ -397,9 +397,9 @@ try {
         await shot("empty");
         assert.equal(await button.isDisabled(), true, "an empty message box has nothing to send");
         await shot("disabled");
-        // ordinary multiline Unicode content, with a whole paste marker pasted inside it
+        // ordinary multiline Unicode content
         const written = language === "ko" ? "첫 단계를 실행해\n그다음 두 번째 단계 ✓" : "Run step one\nthen step two ✓";
-        await box.fill(written.replace("\n", "\n\u001b[201~"));
+        await box.fill(written);
         await box.evaluate((node: HTMLTextAreaElement) => node.blur());
         await shot("multiline");
         await shot("rest");
@@ -417,7 +417,7 @@ try {
         await shot("pressed");
         await page.mouse.move(0, 0);
         await page.mouse.up();
-        assert.equal(await box.inputValue(), written.replace("\n", "\n\u001b[201~"));
+        assert.equal(await box.inputValue(), written);
         // loading: the receipt is held
         await page.evaluate(() => { (window as any).fitHoldSend = true; });
         await button.click();
@@ -425,7 +425,7 @@ try {
         await shot("loading");
         await page.evaluate(() => { (window as any).fitHoldSend = false; (window as any).fitReply(false); });
         await page.waitForFunction(() => !document.querySelector(".composer-send")?.hasAttribute("aria-busy"));
-        // sent for real: the marker is gone, the message is as written
+        // sent for real with a whole paste marker pasted inside it: the marker is gone, the message is as written
         await note.waitFor();
         await box.fill(written.replace("\n", "\n\u001b[201~"));
         await button.click();
