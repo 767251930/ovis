@@ -1470,6 +1470,9 @@ try {
           for (let attempt = 0; ; attempt += 1) {
             await state.filter({ hasText: expected }).waitFor();
             await ready();
+            // the sandboxed page draws in a process of its own: two of its frames painted since the
+            // state changed, so the shot shows that state rather than the page's previous paint
+            await state.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
             await shoot(view, name);
             if (expected.test(await state.innerText())) return;
             assert.ok(attempt < 3, `${name} at ${tag}: the page left ${expected} while it was captured`);
