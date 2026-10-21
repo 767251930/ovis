@@ -50,6 +50,14 @@ const control = `<script>(() => {
   const fetchDemo = window.fetch.bind(window), EventSourceDemo = window.EventSource, DemoSocket = window.WebSocket;
   window.lifetimes = {};
   window.laptop = JSON.parse(sessionStorage.getItem("pane-lifetime-test:laptop") ?? "null");
+  // a pane whose agent status this check holds still, over the demo's own turns
+  const pinned = JSON.parse(sessionStorage.getItem("pane-lifetime-test:pinned") ?? "{}");
+  const pin = (snapshot) => {
+    for (const pane of snapshot.panes ?? []) if (pinned[pane.pane_id]) pane.agent_status = pinned[pane.pane_id];
+    for (const agent of snapshot.agents ?? []) if (pinned[agent.pane_id]) agent.agent_status = pinned[agent.pane_id];
+    return snapshot;
+  };
+  const pinFrame = (message) => message && message.type === "pane-status" && pinned[message.pane_id] ? { ...message, agent_status: pinned[message.pane_id] } : message;
   window.emptyRoster = false;
   window.holdAcks = false;
   window.sentFrames = [];
@@ -65,7 +73,7 @@ const control = `<script>(() => {
     const lifetime = window.lifetimes[id];
     if (lifetime === null) delete copy.herdr_lifetime;
     else if (typeof lifetime === "string") copy.herdr_lifetime = lifetime;
-    return copy;
+    return pin(copy);
   };
   const roster = (list) => {
     const out = list.map((machine) => ({ ...machine, snapshot: named(machine.snapshot, machine.id) }));
@@ -86,6 +94,7 @@ const control = `<script>(() => {
       this.inner.onmessage = (event) => {
         const message = JSON.parse(event.data);
         if (message.type === "machines") { last = message.machines; message.machines = roster(last); }
+        if (message.type === "machine-message") message.message = pinFrame(message.message);
         this.deliver(message);
       };
       this.inner.onerror = (event) => this.onerror?.(event);
@@ -117,6 +126,7 @@ const control = `<script>(() => {
     sockets.add(socket);
     const push = socket.push.bind(socket);
     socket.push = (message) => {
+      message = pinFrame(message);
       if (message.type === "snapshot") message = { ...message, snapshot: machine === "laptop" ? named({ ...message.snapshot, herdr_lifetime: "demo-herdr-laptop" }, "laptop") : named(message.snapshot, "local") };
       if (window.holdAcks && message.type === "submit-result") { held.push(() => push(message)); return; }
       push(message);
@@ -345,9 +355,10 @@ async function failure(browser: Browser, base: string): Promise<void> {
     pass(S, "an empty roster deletes no unsent text", { kept: kept.length });
 
     // lifetime A proven again; a send on its way when herdr is replaced: its late receipt settles A alone
-    // an agent at rest: a message to it goes straight in, and only its acknowledgement settles the draft
-    const IDLE = await page.evaluate(async () => ((await (await fetch("/api/session")).json()).snapshot.panes as { pane_id: string; agent?: string; agent_status: string }[])
-      .find((pane) => pane.agent && (pane.agent_status === "idle" || pane.agent_status === "done"))!.pane_id);
+    // an agent held at rest: a message to it goes straight in (a working one's is queued and leaves
+    // the box at once), and only its acknowledgement settles the draft
+    const IDLE = panes.omp;
+    await page.evaluate((pane) => sessionStorage.setItem("pane-lifetime-test:pinned", JSON.stringify({ [pane]: "idle" })), IDLE);
     await restartBridge(page, null, IDLE, base);
     await lensIs(page, "chat");
     await composer(page).fill("A: ship it");
