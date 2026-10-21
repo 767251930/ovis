@@ -355,8 +355,9 @@ try {
       // message arrives as written; any other escape byte is refused by the bridge (here the demo's answer), and the
       // draft stays with the reason. Observe-only and offline keep their own guards. With UI_EVIDENCE_DIR set, every
       // state is captured as submit-framing-<width>-<theme>[-ko]-<state>.png, and the measured numbers are written.
+      // The conversation is frozen: the accepted send's reply never lands mid-capture, so every frame shows the same turns.
       const framingMeasures: Record<string, unknown>[] = [];
-      for (const [width, language] of [[390, "en"], [1440, "en"], [390, "ko"]] as const) for (const theme of ["light", "dark"] as const) await withCard(browser, width, { agent: "claude", model: "claude-opus-5-5", status: "idle", language, theme, ...(width === 390 ? { scale: 3 } : {}) }, async (page) => {
+      for (const [width, language] of [[390, "en"], [1440, "en"], [390, "ko"]] as const) for (const theme of ["light", "dark"] as const) await withCard(browser, width, { agent: "claude", model: "claude-opus-5-5", status: "idle", freezeConversation: true, language, theme, ...(width === 390 ? { scale: 3 } : {}) }, async (page) => {
         const evidence = process.env.UI_EVIDENCE_DIR;
         const name = `submit-framing-${width}-${theme}${language === "ko" ? "-ko" : ""}`;
         const shot = async (state: string) => {
