@@ -24,7 +24,7 @@ const LONG_MODEL = "gpt-5.6-sol-codex-preview-2026-10";
 // ids it names: "GPT-5.6" and "Opus 5.5"; null: the conversation names no model
 const NAMED = ["gpt-5.6", "claude-opus-5-5"] as const;
 
-interface Case { model: string | null; agent?: "claude" | "codex" | "pi" | "omo"; pending?: boolean; effort?: string | null; status?: "working" | "idle"; mic?: boolean; ring?: boolean; chatFontSize?: number | null; showUsage?: boolean; weeklyOnly?: boolean; suggestion?: string | null; contextUsed?: number; stream?: number; freezeConversation?: boolean; language?: "en" | "ko" | "ja" | "zh"; theme?: "light" | "dark" }
+interface Case { model: string | null; agent?: "claude" | "codex" | "pi" | "omo"; pending?: boolean; effort?: string | null; status?: "working" | "idle"; mic?: boolean; ring?: boolean; chatFontSize?: number | null; showUsage?: boolean; weeklyOnly?: boolean; suggestion?: string | null; contextUsed?: number; stream?: number; freezeConversation?: boolean; language?: "en" | "ko" | "ja" | "zh"; theme?: "light" | "dark"; scale?: number }
 type Draw = "full" | "no-effort" | "out";
 interface ComposerScrollGeometry {
   height: number;
@@ -218,7 +218,7 @@ try {
   /** One card: a phone (390px, touch) or a mouse-driven window of `width`. */
   const withCard = async (browser: Browser, width: number, state: Case, run: (page: Page) => Promise<void>): Promise<void> => {
     const touch = width <= 480;
-    const context = await browser.newContext({ viewport: { width, height: 844 }, hasTouch: touch, isMobile: touch, locale: state.language ?? "en-US" });
+    const context = await browser.newContext({ viewport: { width, height: 844 }, hasTouch: touch, isMobile: touch, locale: state.language ?? "en-US", ...(state.scale ? { deviceScaleFactor: state.scale } : {}) });
     try {
       await context.addInitScript((fitCase) => {
         if (localStorage.getItem("herdr-web-ui:settings") === null) localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: fitCase.language ?? "en", voiceInput: fitCase.mic ? "on" : "off", chatFontSize: fitCase.chatFontSize ?? null, showUsage: fitCase.showUsage ?? false, usageCount: "used", ...(fitCase.theme ? { theme: fitCase.theme } : {}) }));
@@ -356,7 +356,7 @@ try {
       // draft stays with the reason. Observe-only and offline keep their own guards. With UI_EVIDENCE_DIR set, every
       // state is captured as submit-framing-<width>-<theme>[-ko]-<state>.png, and the measured numbers are written.
       const framingMeasures: Record<string, unknown>[] = [];
-      for (const [width, language] of [[390, "en"], [1440, "en"], [390, "ko"]] as const) for (const theme of ["light", "dark"] as const) await withCard(browser, width, { agent: "claude", model: "claude-opus-5-5", status: "idle", language, theme }, async (page) => {
+      for (const [width, language] of [[390, "en"], [1440, "en"], [390, "ko"]] as const) for (const theme of ["light", "dark"] as const) await withCard(browser, width, { agent: "claude", model: "claude-opus-5-5", status: "idle", language, theme, ...(width === 390 ? { scale: 3 } : {}) }, async (page) => {
         const evidence = process.env.UI_EVIDENCE_DIR;
         const name = `submit-framing-${width}-${theme}${language === "ko" ? "-ko" : ""}`;
         const shot = async (state: string) => {
@@ -375,12 +375,21 @@ try {
             const send = document.querySelector<HTMLElement>(".composer-send")!.getBoundingClientRect();
             const text = document.querySelector<HTMLElement>(".composer-text")!;
             const noteNode = document.querySelector<HTMLElement>(".composer-note");
-            const rgb = (value: string) => (value.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number);
-            const lum = ([r, g, b]: number[]) => { const c = [r!, g!, b!].map((v) => { const s = v / 255; return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4; }); return 0.2126 * c[0]! + 0.7152 * c[1]! + 0.0722 * c[2]!; };
-            const background = (node: HTMLElement | null): string => { for (let at = node; at; at = at.parentElement) { const color = getComputedStyle(at).backgroundColor; if (!/rgba\(.*,\s*0\)$/.test(color) && color !== "transparent") return color; } return getComputedStyle(document.body).backgroundColor; };
+            // a CSS colour as sRGB with alpha, through a canvas (it resolves oklch and color-mix too)
+            const canvas = document.createElement("canvas").getContext("2d", { willReadFrequently: true })!;
+            const rgba = (value: string): number[] => { canvas.clearRect(0, 0, 1, 1); canvas.fillStyle = "#000"; canvas.fillStyle = value; canvas.fillRect(0, 0, 1, 1); const [r, g, b, a] = canvas.getImageData(0, 0, 1, 1).data; return [r!, g!, b!, a! / 255]; };
+            const over = (top: number[], below: number[]) => [0, 1, 2].map((i) => top[i]! * top[3]! + below[i]! * (1 - top[3]!)).concat(1);
+            // what is painted behind a node: its own and its ancestors' backgrounds, composited from the page down
+            const backdrop = (node: HTMLElement): number[] => {
+              const layers: number[][] = [];
+              for (let at: HTMLElement | null = node; at; at = at.parentElement) layers.push(rgba(getComputedStyle(at).backgroundColor));
+              return layers.reverse().reduce((below, layer) => over(layer, below), [255, 255, 255, 1]);
+            };
+            const lum = (c: number[]) => { const [r, g, b] = c.slice(0, 3).map((v) => { const s = v / 255; return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4; }); return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!; };
             const ratio = (node: HTMLElement | null) => {
               if (!node) return null;
-              const a = lum(rgb(getComputedStyle(node).color)), b = lum(rgb(background(node)));
+              const behind = backdrop(node);
+              const a = lum(over(rgba(getComputedStyle(node).color), behind)), b = lum(behind);
               return Math.round(((Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)) * 100) / 100;
             };
             return {
