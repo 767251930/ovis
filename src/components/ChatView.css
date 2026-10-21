@@ -197,11 +197,19 @@
 }
 
 .chat-copy-error,
-.markdown-code-error,
-.markdown-table-error {
+.markdown-code-error {
   margin: 0;
   color: var(--danger-text);
   font-size: var(--fs-xs);
+}
+
+/* a table's refused copy reads at the prose size (it is the one way to the table's text then), and
+   starts below the focus ring the copy above it keeps, so the ring never crosses the words (the
+   table's own class outranks `.markdown p`) */
+.markdown-table > .markdown-table-error {
+  margin: var(--space-2) 0 var(--space-3);
+  color: var(--danger-text);
+  font-size: var(--chat-fs-body);
 }
 
 .markdown-code-error {
@@ -1226,6 +1234,9 @@
     height: var(--touch-target);
     margin-block: calc((var(--chip-h) - var(--touch-target)) / 2);
   }
+
+  /* the refusal starts below the target that reaches under the row, and clear of its ring */
+  .markdown-table > .markdown-table-error { margin-top: calc((var(--touch-target) - var(--chip-h)) / 2 + var(--space-2)); }
 
   /* no hover on touch: the meta rows are always there, quietly */
   .chat-turn-meta { opacity: 1; pointer-events: auto; }

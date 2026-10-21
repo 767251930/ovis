@@ -185,6 +185,20 @@ async function focusByKeyboard(page: Page, button: Locator): Promise<void> {
   assert.equal(await button.evaluate((node) => node === document.activeElement && node.matches(":focus-visible")), true, "Tab lands on the copy with a visible ring");
 }
 
+/**
+ * A refusal is read at no less than the minimum text size (15 px on a phone, 14 px on a desktop)
+ * and starts below the copy's focus ring, so the ring a keyboard leaves on the copy never crosses it.
+ */
+async function refusalClearOfRing(alert: Locator, button: Locator, width: number): Promise<void> {
+  const { size, gap } = await alert.evaluate((node, control) => {
+    const root = getComputedStyle(document.documentElement);
+    const ring = parseFloat(root.getPropertyValue("--ring")) + parseFloat(root.getPropertyValue("--ring-offset"));
+    return { size: parseFloat(getComputedStyle(node).fontSize), gap: node.getBoundingClientRect().top - (control!.getBoundingClientRect().bottom + ring) };
+  }, await button.elementHandle());
+  assert.ok(size >= (width === 390 ? 15 : 14), `the refusal reads at ${size}px`);
+  assert.ok(gap >= 0, `the refusal starts ${-gap}px inside the copy's focus ring`);
+}
+
 async function withContext(browser: Browser, width: number, theme: Theme, language: string, run: (page: Page, context: BrowserContext) => Promise<void>, hold?: "file" | "answer"): Promise<void> {
   const phone = width === 390;
   const context = await browser.newContext({
@@ -365,6 +379,7 @@ try {
             assert.equal(await alert.textContent(), "Couldn't copy. Select the text and copy it manually.");
             assert.equal(await button.getAttribute("aria-label"), "Copy table", "a refused copy never says Copied");
             assert.equal(await settled.locator(".is-copied").count(), 0);
+            await refusalClearOfRing(alert, button, width);
             await capture(page, width, theme, "error");
             await page.evaluate(() => {
               delete (navigator.clipboard as { writeText?: unknown }).writeText;
@@ -475,6 +490,7 @@ try {
         const alert = block.locator(".markdown-table-error[role=alert]");
         await alert.waitFor();
         assert.equal(await alert.textContent(), "복사하지 못했습니다. 텍스트를 선택해 직접 복사하세요.");
+        await refusalClearOfRing(alert, button, 390);
         await capture(page, 390, "light", "error", "ko");
         console.log("PASS 390 ko: the copy's name and the refusal read in Korean");
       });

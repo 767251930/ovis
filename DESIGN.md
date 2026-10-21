@@ -1614,7 +1614,10 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   GFM (`serializeMarkdownTable`, lib/markdownClipboard.ts: a header, `---` separators, every row
   padded to the header's width, pipes and backslashes escaped), says **Table copied** with the
   check glyph and `--status-done` for a moment, and a refused clipboard says so in a `role="alert"`
-  line (`.markdown-table-error`, the code block's wording) with no false Copied. The row is there
+  line (`.markdown-table-error`, the code block's wording at the prose size `--chat-fs-body`, as
+  it is then the one way to the table's text) with no false Copied; the line starts below the
+  copy's focus ring, past the touch target's overhang on touch, so a ring left by the keyboard
+  never crosses it. The row is there
   from the first render and keeps its height while the table streams, so the table does not move
   when the action arrives: a table in an answer or work narration still arriving offers no copy
   (`complete` on Markdown, false unless the caller says the text is all there), a settled turn,
