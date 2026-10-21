@@ -606,12 +606,27 @@ export async function checkTerminalInput(browser: Browser, origin: string, pane:
 async function checkCanonicalSubmit(browser: Browser): Promise<void> {
   const { createServer } = await import("../server/index.ts");
   const { herdrRpc, workspaceCreate, workspaceClose } = await import("../server/herdr/client.ts");
-  const { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } = await import("node:fs");
+  const { existsSync, mkdtempSync, readFileSync, rmSync, watch, writeFileSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
   const root = mkdtempSync(join(tmpdir(), "herdr-canonical-submit-"));
   const script = join(root, "record.cjs");
-  writeFileSync(script, `const fs=require("node:fs");const [out,mode]=process.argv.slice(2);process.stdin.setRawMode(true);process.stdin.resume();process.stdout.write((mode==="on"?"\\x1b[?2004h":"\\x1b[?2004l")+"$ ",()=>fs.writeFileSync(out,""));process.stdin.on("data",c=>fs.appendFileSync(out,JSON.stringify(c.toString("utf8"))+"\\n"));`);
+  // the recorder asks for its mode, then names its pid once that is written; SIGUSR2 has it ask again (after the
+  // browser attached) and draw "ready$"; every byte it reads goes to its log as one JSON string per chunk
+  writeFileSync(script, `const fs=require("node:fs");const [out,mode]=process.argv.slice(2);const seq=mode==="on"?"\\x1b[?2004h":"\\x1b[?2004l";process.stdin.setRawMode(true);process.stdin.resume();process.on("SIGUSR2",()=>process.stdout.write(seq+"\\r\\nready$ "));process.stdin.on("data",c=>fs.appendFileSync(out,JSON.stringify(c.toString("utf8"))+"\\n"));process.stdout.write(seq+"$ ",()=>{fs.writeFileSync(out,"");fs.writeFileSync(out+".pid",String(process.pid))});`);
+  /** Settles once `ready()` holds, checked now and on every change under `path` (subscribed at the call); throws at the deadline. */
+  const whenChanged = (path: string, ready: () => boolean, what: string, ms = 10_000): Promise<void> => new Promise((resolve, reject) => {
+    let settled = false;
+    const settle = (error?: unknown) => {
+      if (settled) return;
+      settled = true; clearTimeout(timer); watcher.close();
+      if (error) reject(error); else resolve();
+    };
+    const check = () => { try { if (ready()) settle(); } catch (error) { settle(error); } };
+    const watcher = watch(path, check);
+    const timer = setTimeout(() => settle(new Error(`${what}: not within ${ms} ms`)), ms);
+    check();
+  });
   const servers = { attached: createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: join(root, "attached") }), mirror: createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: join(root, "mirror"), terminalAttach: false }) };
   const owned: string[] = [];
   const text = "check canonical commit 한글\tcolumn\nsecond line ✓ 🙂";
@@ -619,9 +634,9 @@ async function checkCanonicalSubmit(browser: Browser): Promise<void> {
   const paste = `\u001b[200~${lines}\u001b[201~`;
   const cases = [
     { name: "attached, bracketed paste on", server: "attached", mode: "on", agent: false, bytes: paste },
-    // herdr's attach reports bracketed paste on to the browser whatever the program asked for (measured, herdr 0.9.5):
-    // there the pane gets exactly the canonical payload the browser shaped, and one Enter
-    { name: "attached, bracketed paste off", server: "attached", mode: "off", agent: false, bytes: null },
+    // herdr's attach reports bracketed paste on when it starts, whatever the program asked for (measured, herdr 0.9.5):
+    // the program asks for off again once the browser is attached, and the browser must see that before it sends
+    { name: "attached, bracketed paste off", server: "attached", mode: "off", agent: false, bytes: lines },
     { name: "mirror fallback, agent pane", server: "mirror", mode: "on", agent: true, bytes: paste },
     { name: "mirror fallback, plain pane", server: "mirror", mode: "off", agent: false, bytes: lines },
   ] as const;
@@ -631,9 +646,11 @@ async function checkCanonicalSubmit(browser: Browser): Promise<void> {
       owned.push(made.workspace.workspace_id);
       const pane = made.root_pane.pane_id;
       const log = join(root, `${owned.length}.jsonl`);
+      const pidFile = `${log}.pid`;
+      const started = whenChanged(root, () => existsSync(pidFile) && readFileSync(pidFile, "utf8") !== "", `${item.name}: the recorder started`);
       await herdrRpc("pane.send_text", { pane_id: pane, text: `exec '${process.execPath}' '${script}' '${log}' ${item.mode}\n` });
-      const started = Date.now() + 10_000;
-      while (!existsSync(log)) { assert(Date.now() < started, "the recorder did not start"); await new Promise((r) => setTimeout(r, 25)); }
+      await started;
+      const recorder = Number(readFileSync(pidFile, "utf8"));
       if (item.agent) await herdrRpc("pane.report_agent", { pane_id: pane, source: "manual", agent: "claude", state: "idle" });
       const bytes = () => readFileSync(log, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as string).join("");
       const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
@@ -651,10 +668,20 @@ async function checkCanonicalSubmit(browser: Browser): Promise<void> {
         if (frame.type === "submit") submits.push(frame);
       }));
       const results: Array<{ ok: boolean; code?: string }> = [];
+      let resultArrived = () => {};
+      const resultSeen = new Promise<void>((resolve) => { resultArrived = resolve; });
+      // the attach stream as the browser's terminal got it: the last bracketed-paste request in it is the mode it holds
+      let drawn = "";
       page.on("websocket", (socket) => socket.on("framereceived", ({ payload }) => {
         const frame = JSON.parse(String(payload));
-        if (frame.type === "submit-result") results.push(frame);
+        if (frame.type === "submit-result") { results.push(frame); resultArrived(); }
+        if (frame.type === "pty-data" && frame.pane_id === pane) drawn += frame.data;
       }));
+      const browserMode = () => {
+        const on = drawn.lastIndexOf("\u001b[?2004h");
+        const off = drawn.lastIndexOf("\u001b[?2004l");
+        return on < 0 && off < 0 ? "none" : on > off ? "on" : "off";
+      };
       try {
         await page.goto(`http://127.0.0.1:${servers[item.server].port}/?pane=${encodeURIComponent(pane)}`);
         await page.locator(".conn-live").waitFor();
@@ -663,21 +690,40 @@ async function checkCanonicalSubmit(browser: Browser): Promise<void> {
         // the input line holds the program's prompt once the pane is drawn: the mode the program asked for came before it
         await page.locator(".xterm-rows", { hasText: "$" }).waitFor();
         await page.waitForFunction(() => document.querySelector(".terminal-banner") === null);
+        // with the browser attached, the program asks for its mode again; its "ready$" comes after that request
+        process.kill(recorder, "SIGUSR2");
+        await page.locator(".xterm-rows", { hasText: "ready$" }).waitFor();
+        if (item.server === "attached") {
+          const mode = browserMode();
+          if (mode !== item.mode) {
+            // the scenario cannot be shown here: the browser's terminal never learned the program's mode
+            assert.equal(item.mode, "off", `${item.name}: the browser holds bracketed paste ${mode}`);
+            console.log(`BLOCKED canonical multiline submit, ${item.name}: the program asked for bracketed paste off after the attach, but the attach stream left the browser's terminal ${mode} (requests seen: ${JSON.stringify(drawn.match(/\u001b\[\?2004[hl]/g) ?? [])}); nothing was sent`);
+            assert.deepEqual(errors, []);
+            continue;
+          }
+        }
+        const expected = `${item.bytes}\r`;
+        const landed = whenChanged(log, () => {
+          const got = bytes();
+          assert(expected.startsWith(got), `${item.name}: the pane got ${JSON.stringify(got)}, not ${JSON.stringify(expected)}`);
+          return got === expected;
+        }, `${item.name}: the pane got ${JSON.stringify(expected)}`, 15_000);
+        landed.catch(() => {});
         await line.fill(text);
         await page.getByRole("button", { name: "Send to the terminal", exact: true }).click();
-        const deadline = Date.now() + 10_000;
-        while (results.length === 0) { assert(Date.now() < deadline, `${item.name}: no submit-result`); await new Promise((r) => setTimeout(r, 25)); }
+        let resultDeadline: ReturnType<typeof setTimeout> | undefined;
+        await Promise.race([resultSeen, new Promise<never>((_, reject) => {
+          resultDeadline = setTimeout(() => reject(new Error(`${item.name}: no submit-result within 10000 ms`)), 10_000);
+        })]).finally(() => clearTimeout(resultDeadline));
         assert.deepEqual(results, [{ ...results[0], ok: true }], `${item.name}: the bridge took the submit`);
         assert.equal(submits.length, 1, `${item.name}: one submit`);
         assert.equal(submits[0]!.text, text, `${item.name}: the text as written`);
-        assert.ok([lines, paste].includes(submits[0]!.payload), `${item.name}: a canonical payload, bare or wrapped once`);
-        const expected = `${item.bytes ?? submits[0]!.payload}\r`;
-        while (bytes() !== expected) {
-          assert(Date.now() < deadline + 5_000 && expected.startsWith(bytes()), `${item.name}: the pane got ${JSON.stringify(bytes())}, not ${JSON.stringify(expected)}`);
-          await new Promise((r) => setTimeout(r, 25));
-        }
+        // an attached pane's browser shapes the payload by the mode it saw; a mirror's always sends the bare lines
+        assert.equal(submits[0]!.payload, item.server === "attached" && item.mode === "on" ? paste : lines, `${item.name}: the canonical payload for the mode`);
+        await landed;
         assert.deepEqual(errors, []);
-        console.log(`PASS canonical multiline submit, ${item.name}: frame ${JSON.stringify({ text: submits[0]!.text, payload: submits[0]!.payload })} -> pane ${JSON.stringify(bytes())}`);
+        console.log(`PASS canonical multiline submit, ${item.name}: browser mode ${item.server === "attached" ? browserMode() : "n/a (mirror)"}, frame ${JSON.stringify({ text: submits[0]!.text, payload: submits[0]!.payload })} -> pane ${JSON.stringify(bytes())}`);
       } finally { await context.close(); }
     }
   } finally {
