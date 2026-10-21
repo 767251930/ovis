@@ -1608,6 +1608,23 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   A table fills the reply's width; its cells, file paths included, break between words only, so a
   column is never narrower than its longest word, and a table without room scrolls sideways in
   its own box.
+  A completed table carries one copy action (`.markdown-table-copy`, the `--chip-h` glyph of a
+  user turn's copy) in a `--chip-h` row of its own above the scroller (`.markdown-table-header`),
+  at the right, so the end of a sideways scroll never takes it away; it copies the whole table as
+  GFM (`serializeMarkdownTable`, lib/markdownClipboard.ts: a header, `---` separators, every row
+  padded to the header's width, pipes and backslashes escaped), says **Table copied** with the
+  check glyph and `--status-done` for a moment, and a refused clipboard says so in a `role="alert"`
+  line (`.markdown-table-error`, the code block's wording) with no false Copied. The row is there
+  from the first render and keeps its height while the table streams, so the table does not move
+  when the action arrives: a table in an answer or work narration still arriving offers no copy
+  (`complete` on Markdown, false unless the caller says the text is all there), a settled turn,
+  a task result and a file Preview do, nested tables included. With a mouse the glyph shows on
+  hover or focus-within and takes no click while unseen, as the chat meta row does; on touch it
+  is the `--touch-target` reaching above and below its one-line row, as a user turn's copy is.
+  This is the phone-selection adaptation of #1042: no widely used coding-agent app offers a
+  table action (the Claude and Codex apps, Paseo and T3 Code leave tables to selection), so the
+  control follows this app's own code-copy convention instead, and it is distinct from the
+  T3 Code-derived selection sanitizer above, which still copies a selection as the browser's text.
   Thinking renders as a folded block only when **Show thinking** is enabled.
 - Auto-follow stops when the reader scrolls up; later output raises a **New messages** pill.
 - An empty chat is greeted from the composer (`.composer-greeting`, below), only where the agent's

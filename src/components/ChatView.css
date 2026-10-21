@@ -197,7 +197,8 @@
 }
 
 .chat-copy-error,
-.markdown-code-error {
+.markdown-code-error,
+.markdown-table-error {
   margin: 0;
   color: var(--danger-text);
   font-size: var(--fs-xs);
@@ -226,7 +227,8 @@
 
 .chat-copy svg,
 .chat-meta-btn svg,
-.markdown-code-copy svg {
+.markdown-code-copy svg,
+.markdown-table-copy svg {
   width: var(--fs-sm);
   height: var(--fs-sm);
 }
@@ -281,20 +283,23 @@
 @media (pointer: fine) {
   .chat-copy,
   .chat-meta-btn,
-  .chat-tool-copy {
+  .chat-tool-copy,
+  .markdown-table-copy {
     position: relative;
   }
 
   .chat-copy::before,
   .chat-meta-btn::before,
-  .chat-tool-copy::before {
+  .chat-tool-copy::before,
+  .markdown-table-copy::before {
     content: "";
     position: absolute;
     inset: calc((var(--chip-h) - var(--pointer-target)) / 2);
   }
 
   /* the copy glyph's hairline edge lies inside its box: the expander starts past it */
-  .chat-copy::before {
+  .chat-copy::before,
+  .markdown-table-copy::before {
     inset: calc((var(--chip-h) - var(--pointer-target)) / 2 - var(--hairline));
   }
 }
@@ -657,6 +662,46 @@
 .markdown-code-more:hover {
   background: var(--bg-hover);
   color: var(--text);
+}
+
+/* A table's copy sits in a row of its own above the scroller, at the right, so a sideways scroll
+   never takes it away; the row is there from the first render and keeps its height while the
+   action waits for the table to complete, so the table does not move when the action arrives.
+   The inset at the end is the focus ring's room: a transcript row is painted within its column
+   (ChatTimeline's rows contain paint), so a ring past the table's edge would be cut. */
+.markdown-table-header {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: var(--chip-h);
+  padding-inline-end: var(--space-1);
+}
+
+.markdown-table-copy {
+  width: var(--chip-h);
+  height: var(--chip-h);
+  min-width: var(--chip-h);
+}
+
+/* the copied state is said by the glyph (a check) and the label; the colour only agrees */
+.markdown-table-copy.is-copied {
+  color: var(--status-done);
+}
+
+/* with a mouse the copy shows on hover or focus, as the chat meta row does, and takes no click
+   while unseen; it keeps its place, so nothing moves when it appears */
+@media (hover: hover) and (pointer: fine) and (not (any-pointer: coarse)) {
+  .markdown-table-copy {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--dur-fast) var(--ease-out);
+  }
+
+  .markdown-table:hover .markdown-table-copy,
+  .markdown-table:focus-within .markdown-table-copy {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 
 .markdown-table-wrap {
@@ -1174,6 +1219,14 @@
     font-size: var(--chat-fs-body);
   }
 
+  /* a finger's target over a row that stays one line: the button reaches above and below it, as
+     a user turn's copy does */
+  .markdown-table-copy {
+    width: var(--touch-target);
+    height: var(--touch-target);
+    margin-block: calc((var(--chip-h) - var(--touch-target)) / 2);
+  }
+
   /* no hover on touch: the meta rows are always there, quietly */
   .chat-turn-meta { opacity: 1; pointer-events: auto; }
 
@@ -1215,6 +1268,7 @@
 @media (prefers-reduced-motion: reduce) {
   .chat-turn-meta,
   .markdown-code-header,
+  .markdown-table-copy,
   .work-block { transition: none; }
   .work-block.is-live .work-block-title::before { animation: none; }
 }

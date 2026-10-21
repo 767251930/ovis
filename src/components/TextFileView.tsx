@@ -56,7 +56,7 @@ export function TextFileView({ path, blocks, lines, virtual, selectable, onOpen,
   })();
   return <div className={virtual !== null && blocks === null ? "file-viewer-content file-viewer-content-virtual" : "file-viewer-content"}>
     {blocks !== null
-      ? <OpenFileContext.Provider value={openLink}><ProgressiveMarkdown className={MARKDOWN_CLASS[settings.markdownWidth]} blocks={blocks} /></OpenFileContext.Provider>
+      ? <OpenFileContext.Provider value={openLink}><ProgressiveMarkdown className={MARKDOWN_CLASS[settings.markdownWidth]} blocks={blocks} complete /></OpenFileContext.Provider>
       : code}
   </div>;
 }

@@ -700,6 +700,8 @@ export const ZH: Record<string, string> = {
   // ---- markdown ----
   "Code copied": "已复制代码",
   "Copy code": "复制代码",
+  "Table copied": "已复制表格",
+  "Copy table": "复制表格",
   "Show less": "收起",
   "Show all {n} lines": "显示全部 {n} 行",
   "Too long to highlight": "内容过长，未做语法高亮",

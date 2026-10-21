@@ -15,6 +15,7 @@ import { imageSlotStyle, standaloneImage } from "../lib/imageBox.ts";
 import { formatBytes } from "../lib/bridgeProgress.ts";
 import { MermaidLightbox } from "./MermaidLightbox.tsx";
 import { copyText } from "../lib/clipboard.ts";
+import { serializeMarkdownTable, type MarkdownTable } from "../lib/markdownClipboard.ts";
 import { lazyChunk } from "../lib/lazyChunk.ts";
 import type { SkillMatcher } from "../lib/skillMentions.ts";
 import { previewChunks } from "../lib/textPreview.ts";
@@ -223,7 +224,7 @@ function Inline({ nodes, interactive = true, standalone = false }: { nodes: Inli
 }
 
 /** A list, nested lists and tables in its items; a task item's box stands in for its bullet. */
-function List({ block }: { block: ListBlock }) {
+function List({ block, complete }: { block: ListBlock; complete: boolean }) {
   const Tag = block.ordered ? "ol" : "ul";
   const t = useT();
   const id = useId();
@@ -237,7 +238,7 @@ function List({ block }: { block: ListBlock }) {
           {item.checked !== undefined && <span className="markdown-task-box" role="checkbox" aria-checked={item.checked} aria-disabled="true"
             aria-labelledby={item.content.length === 0 ? undefined : `${id}-${index}`} aria-label={item.content.length === 0 ? t("Empty task") : undefined}>{item.checked && <Check aria-hidden="true" />}</span>}
           {item.checked === undefined ? <Inline nodes={item.content} /> : <span id={`${id}-${index}`}><Inline nodes={item.content} /></span>}
-          {item.blocks !== undefined && <Blocks blocks={item.blocks} />}
+          {item.blocks !== undefined && <Blocks blocks={item.blocks} complete={complete} />}
         </li>
       ))}
     </Tag>
@@ -299,7 +300,45 @@ function CodeBlock({ language, value }: { language: string; value: string }) {
   );
 }
 
-function Blocks({ blocks }: { blocks: MarkdownBlock[] }) {
+/**
+ * A table, with its copy action in a row above the scroller: a sideways scroll leaves the action
+ * where it is, and the copy is the whole table as GFM (lib/markdownClipboard.ts), which a phone's
+ * selection cannot take from the cells. The action is there only once the table is `complete`:
+ * while an answer streams, rows are still arriving, and a copy of half of them would pass for the
+ * whole. The row keeps its height either way, so the table does not move when the action arrives.
+ */
+function Table({ block, complete }: { block: MarkdownTable; complete: boolean }) {
+  const t = useT();
+  const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
+  const copy = async (): Promise<void> => {
+    const ok = await copyText(serializeMarkdownTable(block));
+    setCopied(ok);
+    setCopyFailed(!ok);
+    if (ok) window.setTimeout(() => setCopied(false), 1500);
+  };
+  return (
+    <div className="markdown-table">
+      <div className="markdown-table-header">
+        {complete && (
+          <button type="button" className={copied ? "icon-button markdown-table-copy is-copied" : "icon-button markdown-table-copy"} onClick={() => void copy()}
+            aria-label={t(copied ? "Table copied" : "Copy table")} title={t(copied ? "Table copied" : "Copy table")}>
+            {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
+          </button>
+        )}
+      </div>
+      {copyFailed && <p className="markdown-table-error" role="alert">{t("Couldn't copy. Select the text and copy it manually.")}</p>}
+      <div className="markdown-table-wrap">
+        <table><thead><tr>{block.header.map((cell, cellIndex) => <th key={cellIndex}><Inline nodes={cell} /></th>)}</tr></thead>
+          <tbody>{block.rows.map((row, rowIndex) => <tr key={rowIndex}>{row.map((cell, cellIndex) => <td key={cellIndex}><Inline nodes={cell} /></td>)}</tr>)}</tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/** `complete`: the text is all there (a file, a settled turn), so a table in it may be copied whole. */
+function Blocks({ blocks, complete }: { blocks: MarkdownBlock[]; complete: boolean }) {
   return <>{blocks.map((block, index): ReactNode => {
     const key = `${block.type}-${index}`;
     switch (block.type) {
@@ -310,20 +349,14 @@ function Blocks({ blocks }: { blocks: MarkdownBlock[] }) {
         return <h3 key={key} className={`markdown-h${block.level}${block.align ? " markdown-center" : ""}`}><Inline nodes={block.content} /></h3>;
       case "paragraph":
         return <p key={key} className={block.align ? "markdown-center" : undefined}>{block.lines.map((line, lineIndex) => <span key={lineIndex}><Inline nodes={line} standalone={standaloneImage(line)} />{lineIndex < block.lines.length - 1 && <br />}</span>)}</p>;
-      case "list": return <List key={key} block={block} />;
-      case "blockquote": return <blockquote key={key}><Blocks blocks={block.blocks} /></blockquote>;
+      case "list": return <List key={key} block={block} complete={complete} />;
+      case "blockquote": return <blockquote key={key}><Blocks blocks={block.blocks} complete={complete} /></blockquote>;
       case "code": return block.language === "mermaid"
         ? <MermaidDiagram key={key} value={block.value} />
         : <CodeBlock key={key} language={block.language} value={block.value} />;
       case "math": return <MathExpression key={key} value={block.value} displayMode />;
       case "hr": return <hr key={key} />;
-      case "table": return (
-        <div className="markdown-table-wrap" key={key}>
-          <table><thead><tr>{block.header.map((cell, cellIndex) => <th key={cellIndex}><Inline nodes={cell} /></th>)}</tr></thead>
-            <tbody>{block.rows.map((row, rowIndex) => <tr key={rowIndex}>{row.map((cell, cellIndex) => <td key={cellIndex}><Inline nodes={cell} /></td>)}</tr>)}</tbody>
-          </table>
-        </div>
-      );
+      case "table": return <Table key={key} block={block} complete={complete} />;
     }
   })}</>;
 }
@@ -331,10 +364,13 @@ function Blocks({ blocks }: { blocks: MarkdownBlock[] }) {
 /**
  * Markdown rendered. Its props are primitive values, so `memo` skips a parent's re-render: a long plan in
  * the file viewer is not rendered again every time the app polls.
+ *
+ * `complete` says the text is all there: a settled turn, a file. A table then offers its copy. Left
+ * out, it is false: a caller that cannot say never shows a copy of a table still streaming.
  */
-export const Markdown = memo(function Markdown({ children, className, html = false, skills = null }: { children: string; className?: string; html?: boolean; skills?: SkillMatcher | null }) {
+export const Markdown = memo(function Markdown({ children, className, html = false, skills = null, complete = false }: { children: string; className?: string; html?: boolean; skills?: SkillMatcher | null; complete?: boolean }) {
   const blocks = useMemo(() => parseMarkdown(children, 0, html), [children, html]);
-  const parsed = <ParsedMarkdown blocks={blocks} className={className} />;
+  const parsed = <ParsedMarkdown blocks={blocks} className={className} complete={complete} />;
   return skills === null ? parsed : <SkillMatcherContext.Provider value={skills}>{parsed}</SkillMatcherContext.Provider>;
 });
 
@@ -342,12 +378,12 @@ export const Markdown = memo(function Markdown({ children, className, html = fal
  * Markdown parsed elsewhere, rendered as `Markdown` renders its text: the file viewer parses a file
  * in a worker, so a file the parser is slow on cannot hold the page.
  */
-export const ParsedMarkdown = memo(function ParsedMarkdown({ blocks, className }: { blocks: MarkdownBlock[]; className?: string }) {
-  return <div className={className === undefined ? "markdown" : `markdown ${className}`}><Blocks blocks={blocks} /></div>;
+export const ParsedMarkdown = memo(function ParsedMarkdown({ blocks, className, complete = false }: { blocks: MarkdownBlock[]; className?: string; complete?: boolean }) {
+  return <div className={className === undefined ? "markdown" : `markdown ${className}`}><Blocks blocks={blocks} complete={complete} /></div>;
 });
 
-const BlockChunk = memo(function BlockChunk({ blocks }: { blocks: MarkdownBlock[] }) {
-  return <Blocks blocks={blocks} />;
+const BlockChunk = memo(function BlockChunk({ blocks, complete }: { blocks: MarkdownBlock[]; complete: boolean }) {
+  return <Blocks blocks={blocks} complete={complete} />;
 });
 
 /**
@@ -356,7 +392,7 @@ const BlockChunk = memo(function BlockChunk({ blocks }: { blocks: MarkdownBlock[
  * The first chunk shows at once and each later one is added in a task of its own; a drawn chunk is
  * never drawn again, and new blocks start over from the first chunk.
  */
-export const ProgressiveMarkdown = memo(function ProgressiveMarkdown({ blocks, className }: { blocks: MarkdownBlock[]; className?: string }) {
+export const ProgressiveMarkdown = memo(function ProgressiveMarkdown({ blocks, className, complete = false }: { blocks: MarkdownBlock[]; className?: string; complete?: boolean }) {
   const chunks = useMemo(() => previewChunks(blocks), [blocks]);
   const [drawn, setDrawn] = useState<{ blocks: MarkdownBlock[]; count: number }>({ blocks, count: 1 });
   const count = drawn.blocks === blocks ? drawn.count : 1;
@@ -366,6 +402,6 @@ export const ProgressiveMarkdown = memo(function ProgressiveMarkdown({ blocks, c
     return () => clearTimeout(timer);
   }, [blocks, chunks.length, count]);
   return <div className={className === undefined ? "markdown" : `markdown ${className}`}>
-    {chunks.slice(0, count).map((chunk, index) => <BlockChunk key={index} blocks={chunk} />)}
+    {chunks.slice(0, count).map((chunk, index) => <BlockChunk key={index} blocks={chunk} complete={complete} />)}
   </div>;
 });

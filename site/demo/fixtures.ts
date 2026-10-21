@@ -162,7 +162,7 @@ export const CHATS: Record<string, { turns: ConversationTurn[]; metadata: { mode
       { role: "assistant" as const, ts: t(21, 3), end_ts: t(22, 40), parts: [
         tool("read", "src/config.ts", { path: "src/config.ts" }, "export interface PublishOptions { … }"),
         tool("edit", "src/config.ts", { path: "src/config.ts" }, "Updated src/config.ts"),
-        { kind: "text" as const, text: "`RELEASE_RETRIES` sets the default, and `--retries` still wins over it. The README's environment table lists it." },
+        { kind: "text" as const, text: "`RELEASE_RETRIES` sets the default, and `--retries` still wins over it. The README's environment table lists it:\n\n| Variable | Default | Overrides | Notes |\n| --- | --- | --- | --- |\n| `RELEASE_RETRIES` | `3` | `--retries` | transport failures only; a 4xx fails on the first answer |\n| `RELEASE_REGISTRY` | `https://registry.example.com` | `--registry` | see [the registry notes](https://example.com/docs/registry) |\n| `RELEASE_DRY_RUN` | unset | `--dry-run` | prints the upload without sending it |" },
       ] },
     ],
   },

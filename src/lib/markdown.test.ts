@@ -1,7 +1,9 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { loadKatex, Markdown } from "../components/Markdown.tsx";
+import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
+import { loadKatex, Markdown, ProgressiveMarkdown } from "../components/Markdown.tsx";
+import { serializeMarkdownTable } from "./markdownClipboard.ts";
 import { FILE_LINK_COUNT, FILE_LINK_LIMIT, linkFilePaths } from "../components/FilePathLink.tsx";
 import { HighlightedCode } from "../components/HighlightedCode.tsx";
 import { OpenFileContext } from "./filePaths.ts";
@@ -467,7 +469,7 @@ describe("numbered lists as agents write them", () => {
     const source = "1. first\n\n   | a | b |\n   |---|---|\n   | 1 | 2 |\n\n1. second\n1. third";
     expect(lists(source)).toEqual([{ start: 1, items: 3 }]);
     const html = render(source);
-    expect(html).toContain('<ol class="markdown-list"><li><span>first</span><div class="markdown-table-wrap"><table>');
+    expect(html).toContain('<ol class="markdown-list"><li><span>first</span><div class="markdown-table"><div class="markdown-table-header"></div><div class="markdown-table-wrap"><table>');
     expect(html.match(/<ol/g)).toHaveLength(1);
   });
 
@@ -488,7 +490,7 @@ describe("numbered lists as agents write them", () => {
       { type: "paragraph", lines: [[{ value: "After the table." }], [{ value: "And more." }]] },
       { type: "paragraph", lines: [[{ value: "Another paragraph." }]] },
     ]);
-    expect(render(source)).toContain("</table></div><p>");
+    expect(render(source)).toContain("</table></div></div><p>");
   });
 
   it("ends the list at a quote after an item's table, as before tables nested", () => {
@@ -516,6 +518,111 @@ describe("numbered lists as agents write them", () => {
     expect(html).not.toContain("<script");
     expect(html).not.toContain("<img");
     expect(html).not.toContain("<b>");
+  });
+});
+
+describe("table copy", () => {
+  const TABLE = "| Name | Value |\n| --- | --- |\n| a | `b` |";
+  const render = (element: ReturnType<typeof createElement>, languages = ["en"]): string => {
+    const saved = Object.getOwnPropertyDescriptor(navigator, "languages");
+    Object.defineProperty(navigator, "languages", { configurable: true, value: languages });
+    try {
+      return renderToStaticMarkup(createElement(SettingsProvider, { children: element }));
+    } finally {
+      if (saved) Object.defineProperty(navigator, "languages", saved);
+      else Reflect.deleteProperty(navigator, "languages");
+    }
+  };
+
+  it("hides table copy when incomplete", () => {
+    // a caller that says nothing, or says the text is still arriving, shows the table without its
+    // copy; the action's row is there either way, so the table does not move when it completes
+    for (const props of [{}, { complete: false }]) {
+      const html = render(createElement(Markdown, { children: TABLE, ...props }));
+      expect(html).not.toContain("markdown-table-copy");
+      expect(html).toContain('<div class="markdown-table"><div class="markdown-table-header"></div><div class="markdown-table-wrap"><table>');
+    }
+    const complete = render(createElement(Markdown, { children: TABLE, complete: true }));
+    expect(complete).toContain('<div class="markdown-table-header"><button type="button" class="icon-button markdown-table-copy" aria-label="Copy table" title="Copy table">');
+    expect(complete).toContain("</button></div><div class=\"markdown-table-wrap\"><table>");
+    expect(render(createElement(Markdown, { children: TABLE, complete: true }), ["ko"])).toContain('aria-label="\ud45c \ubcf5\uc0ac"');
+  });
+
+  describe("copies nested complete Preview tables", () => {
+    // bun:test has no DOM: what SettingsProvider's effects and copyText's fallback touch is stood in for
+    const names = ["document", "window", "HTMLElement", "HTMLInputElement", "HTMLTextAreaElement", "IS_REACT_ACT_ENVIRONMENT"] as const;
+    const saved = new Map(names.map((name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)]));
+    const savedClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    const savedLanguages = Object.getOwnPropertyDescriptor(navigator, "languages");
+    const error = console.error;
+    let renderer: ReactTestRenderer | null = null;
+    beforeEach(() => {
+      // the static renders above and this renderer share SettingsProvider's context one after the
+      // other, never at once; React still warns of two renderers on one context, and that warning alone is left out
+      console.error = (...args: unknown[]) => { if (!String(args[0]).includes("multiple renderers")) error(...args); };
+      Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, writable: true, value: true });
+      Object.defineProperty(navigator, "languages", { configurable: true, value: ["en"] });
+      for (const name of ["HTMLElement", "HTMLInputElement", "HTMLTextAreaElement"]) Object.defineProperty(globalThis, name, { configurable: true, writable: true, value: class {} });
+      Object.defineProperty(globalThis, "document", { configurable: true, writable: true, value: {
+        activeElement: null,
+        documentElement: { dataset: {}, style: { setProperty() {}, removeProperty() {} } },
+        querySelector: () => null,
+        createElement: () => ({ style: {}, focus() {}, select() {}, remove() {} }),
+        body: { appendChild() {} },
+        execCommand: () => false,
+      } });
+      Object.defineProperty(globalThis, "window", { configurable: true, writable: true, value: {
+        localStorage: { getItem: () => null, setItem() {} },
+        addEventListener() {}, removeEventListener() {},
+        getSelection: () => ({ rangeCount: 0, removeAllRanges() {}, addRange() {} }),
+        setTimeout: (handler: () => void, ms: number) => setTimeout(handler, ms),
+      } });
+    });
+    afterEach(async () => {
+      if (renderer !== null) await act(async () => { renderer?.unmount(); });
+      renderer = null;
+      console.error = error;
+      for (const [name, descriptor] of saved) {
+        if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+        else delete (globalThis as Record<string, unknown>)[name];
+      }
+      if (savedClipboard) Object.defineProperty(navigator, "clipboard", savedClipboard);
+      else delete (navigator as { clipboard?: unknown }).clipboard;
+      if (savedLanguages) Object.defineProperty(navigator, "languages", savedLanguages);
+      else Reflect.deleteProperty(navigator, "languages");
+    });
+    const buttons = (root: ReactTestInstance): ReactTestInstance[] => root.findAll((node) => node.type === "button" && String(node.props["className"]).includes("markdown-table-copy"));
+    const alerts = (root: ReactTestInstance): string[] => root.findAll((node) => node.type === "p" && node.props["role"] === "alert").map((node) => String(node.props["children"]));
+    // a file's Preview: a table at the top, one in a list item and one in a quote
+    const source = `${TABLE}\n\n- item\n\n  | In | List |\n  | --- | --- |\n  | x | y |\n\n> quoted\n>\n> | In | Quote |\n> | --- | --- |\n> | q | r |`;
+    const blocks = parseMarkdown(source);
+
+    it("offers every table of a complete Preview, nested ones too, and none of an incomplete one", async () => {
+      const written: string[] = [];
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: (text: string) => { written.push(text); return Promise.resolve(); } } });
+      await act(async () => { renderer = create(createElement(SettingsProvider, { children: createElement(ProgressiveMarkdown, { blocks, complete: true }) })); });
+      const copies = buttons(renderer!.root);
+      expect(copies).toHaveLength(3);
+      expect(copies.map((button) => button.props["aria-label"])).toEqual(["Copy table", "Copy table", "Copy table"]);
+      await act(async () => { copies[1]!.props["onClick"](); });
+      const nested = blocks[1]?.type === "list" ? blocks[1].items[0]?.blocks?.[0] : undefined;
+      expect(nested?.type).toBe("table");
+      expect(written).toEqual([serializeMarkdownTable(nested as Extract<typeof nested, { type: "table" }>)]);
+      expect(written[0]).toBe("| In | List |\n| --- | --- |\n| x | y |");
+      expect(buttons(renderer!.root).map((button) => button.props["aria-label"])).toEqual(["Copy table", "Table copied", "Copy table"]);
+      expect(alerts(renderer!.root)).toEqual([]);
+      await act(async () => { renderer?.update(createElement(SettingsProvider, { children: createElement(ProgressiveMarkdown, { blocks, complete: false }) })); });
+      expect(buttons(renderer!.root)).toHaveLength(0);
+    });
+
+    it("says when the clipboard refused, and never says Copied then", async () => {
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: () => Promise.reject(new DOMException("Denied", "NotAllowedError")) } });
+      await act(async () => { renderer = create(createElement(SettingsProvider, { children: createElement(ProgressiveMarkdown, { blocks, complete: true }) })); });
+      const [first] = buttons(renderer!.root);
+      await act(async () => { first!.props["onClick"](); });
+      expect(buttons(renderer!.root).map((button) => button.props["aria-label"])).toEqual(["Copy table", "Copy table", "Copy table"]);
+      expect(alerts(renderer!.root)).toEqual(["Couldn't copy. Select the text and copy it manually."]);
+    });
   });
 });
 

@@ -1,6 +1,8 @@
 /** Rendered selection -> native plain text and resource-free rich HTML.
  * HTML sanitization adapted from t3code's markdown-clipboard.ts (MIT).
  */
+import type { InlineNode, MarkdownBlock } from "./markdown.ts";
+
 export interface ClipboardNode {
   readonly tag: string;
   readonly text?: string;
@@ -40,6 +42,80 @@ function richHtml(node: ClipboardNode): string {
 /** The browser owns plain-text layout and whitespace; only the rich representation is rebuilt. */
 export function renderedClipboardPayload(nodes: readonly ClipboardNode[], text: string): ClipboardPayload {
   return { text, html: nodes.map(richHtml).join("") };
+}
+
+/** A table block as the parser reads it (lib/markdown.ts): the header's cells and each row's. */
+export type MarkdownTable = Extract<MarkdownBlock, { type: "table" }>;
+
+/**
+ * What a GFM cell cannot hold unescaped: a pipe ends the cell, a backslash would escape the next
+ * character. Inside a link's label a bracket would end the label too.
+ */
+const escapeText = (value: string, label: boolean): string => value.replace(label ? /[\\|[\]]/g : /[\\|]/g, "\\$&");
+/**
+ * A destination holds no whitespace, and a parenthesis, pipe or backslash in one would end it or
+ * the cell: percent-encoded, the address still names the same resource, and it reads back as one.
+ */
+const escapeDestination = (value: string): string => value.replace(/[\s()|\\]/g, (char) => (/\s/.test(char) ? encodeURIComponent(char) : `%${char.charCodeAt(0).toString(16).toUpperCase()}`));
+
+/**
+ * A code span whose delimiter is longer than any run of backticks inside it, padded with a space
+ * when the code starts or ends with a backtick (CommonMark strips one space from each end). A pipe
+ * inside is still escaped: GFM reads the cell's pipes before its spans. A backslash is not: a code
+ * span is literal.
+ */
+function codeSpan(value: string): string {
+  const longest = Math.max(0, ...[...value.matchAll(/`+/g)].map((run) => run[0].length));
+  const fence = "`".repeat(longest + 1);
+  const pad = value.startsWith("`") || value.endsWith("`") ? " " : "";
+  return `${fence}${pad}${value.replace(/\|/g, "\\|")}${pad}${fence}`;
+}
+
+/** A link or file whose label is its own address: written bare, as the writer had it, and read as a link again. */
+const bare = (node: Extract<InlineNode, { type: "link" | "file" }>): string | null => {
+  const [only] = node.children;
+  if (node.children.length !== 1 || only?.type !== "text") return null;
+  return only.value === (node.type === "link" ? node.href : `file://${node.path}`) ? only.value : null;
+};
+
+/**
+ * The GFM source of a cell's inline nodes, on one line: a line break inside a cell is `<br>`.
+ * Emphasis is written with `*`, which reads inside a word too; a formula keeps its backslashes,
+ * which are its commands, and only its pipes are escaped.
+ */
+function inlineSource(nodes: readonly InlineNode[], label = false): string {
+  let out = "";
+  for (const node of nodes) {
+    switch (node.type) {
+      case "text": out += escapeText(node.value, label); break;
+      case "code": out += codeSpan(node.value); break;
+      case "math": out += `\\(${node.value.replace(/\|/g, "\\|")}\\)`; break;
+      case "strong": out += `**${inlineSource(node.children, label)}**`; break;
+      case "em": out += `*${inlineSource(node.children, label)}*`; break;
+      case "del": out += `~~${inlineSource(node.children, label)}~~`; break;
+      case "link":
+      case "file": {
+        const address = bare(node);
+        out += address !== null ? escapeText(address, label) : `[${inlineSource(node.children, true)}](${escapeDestination(node.type === "link" ? node.href : node.path)})`;
+        break;
+      }
+      case "image": out += `![${escapeText(node.alt, true)}](${escapeDestination(node.src)})`; break;
+    }
+  }
+  return out.replace(/\r\n|[\n\r\u2028\u2029]/g, "<br>");
+}
+
+/**
+ * A table as GFM: the header, a `---` separator per column and every row padded or cut to the
+ * header's width, so the result parses as one rectangular table wherever it is pasted. Cells are
+ * written from the parsed nodes, not the source: alignment the parser does not keep is not
+ * promised, and a cell's pipes and backslashes come out escaped.
+ */
+export function serializeMarkdownTable(table: MarkdownTable): string {
+  const width = Math.max(1, table.header.length);
+  const row = (cells: readonly (readonly InlineNode[])[]): string =>
+    `| ${Array.from({ length: width }, (_, index) => inlineSource(cells[index] ?? [])).join(" | ")} |`;
+  return [row(table.header), `| ${Array.from({ length: width }, () => "---").join(" | ")} |`, ...table.rows.map(row)].join("\n");
 }
 
 function fromDom(node: Node): ClipboardNode {

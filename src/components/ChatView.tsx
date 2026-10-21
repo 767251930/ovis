@@ -540,7 +540,7 @@ function WorkBlockView({ paneId, parts, duration, live, waiting, defaultOpen, sh
     <AnimatedHeight open={open} animateContent={false}>
       <div className="work-block-rows" onFocus={keepOpen} onClick={keepOpen}>{visible.map((part, index) =>
         part.kind === "thinking" ? <ThinkingRow key={index} stateKey={`thinking:${parts.indexOf(part)}`} text={part.text} />
-          : part.kind === "text" ? <div key={index} className="work-narration"><Markdown>{part.text}</Markdown></div>
+          : part.kind === "text" ? <div key={index} className="work-narration"><Markdown complete={!live}>{part.text}</Markdown></div>
             : part.kind === "tool" ? <WorkRow key={index} stateKey={`tool:${parts.indexOf(part)}`} paneId={paneId} part={part} /> : null)}
       </div>
     </AnimatedHeight>
@@ -766,7 +766,7 @@ function TaskResultRow({ task }: { task: OmoTaskResult }) {
       <ChevronDown className="chat-skill-caret" aria-hidden="true" />
     </summary>
     {opened && <div className="chat-task-result-body">
-      {task.result.length > 0 ? <Markdown>{taskResultMarkdown(task.result)}</Markdown> : <p className="chat-task-result-note">{t("The task reported no result")}</p>}
+      {task.result.length > 0 ? <Markdown complete>{taskResultMarkdown(task.result)}</Markdown> : <p className="chat-task-result-note">{t("The task reported no result")}</p>}
       {task.result_cut === true && <p className="chat-task-result-note">{t("This is the first part of a longer result")}</p>}
     </div>}
   </ChatDetails>;
@@ -788,7 +788,7 @@ function TeammateMessageRow({ message, stateKey }: { message: TeammateMessage; s
       <ChevronDown className="chat-skill-caret" aria-hidden="true" />
     </summary>
     {opened && <div className="chat-task-result-body">
-      {message.text ? <Markdown>{message.text}</Markdown> : <p className="chat-task-result-note">{t("The teammate is available; no result was included")}</p>}
+      {message.text ? <Markdown complete>{message.text}</Markdown> : <p className="chat-task-result-note">{t("The teammate is available; no result was included")}</p>}
       <ChatDetails memoryKey={`teammate-raw:${stateKey}`} className="chat-teammate-raw">
         <summary>{t("Original delivery")}</summary>
         <pre>{message.raw}</pre>
@@ -820,7 +820,7 @@ const Turn = memo(function Turn({ paneId, turn, live, waiting, showThinking, ski
   if (compact !== undefined) {
     return <ChatDetails memoryKey="compact" className="chat-compact">
       <summary>{t("Conversation compacted")}{time !== null && <> · {time}</>}</summary>
-      <div className="chat-compact-text"><Markdown>{compact.text}</Markdown></div>
+      <div className="chat-compact-text"><Markdown complete>{compact.text}</Markdown></div>
     </ChatDetails>;
   }
   // OmO's background tasks reported back: a card of what ended, each result on request
@@ -883,7 +883,8 @@ const Turn = memo(function Turn({ paneId, turn, live, waiting, showThinking, ski
     {goal !== null && <GoalActivity goal={goal} />}
     {/* the pending head stands only above no answer: one above words would leave a gap when the turn ends */}
     {(work.length > 0 || (live && answer.length === 0)) && <WorkBlockView paneId={paneId} parts={work} duration={formatWorkDuration(turn.ts, turn.end_ts ?? null)} live={live} waiting={waiting} defaultOpen={workStartsOpen(live, turn.parts)} showThinking={showThinking} pendingHead={answer.length === 0} />}
-    {answer.map((part, index) => <Markdown key={index} skills={skills}>{part.text}</Markdown>)}
+    {/* a settled turn's tables may be copied whole; one still arriving offers no copy of half a table */}
+    {answer.map((part, index) => <Markdown key={index} skills={skills} complete={!live}>{part.text}</Markdown>)}
     {answerText.length > 0 && <div className="chat-turn-meta chat-agent-meta">
       {/* a mouse reads one copy glyph and the words "Plain text"; touch reads the two formats */}
       <CopyButton className="chat-meta-btn" text={answerText} label={t("Copy as markdown")} onResult={copied}><span className="chat-meta-fmt">MD</span></CopyButton>
@@ -1775,7 +1776,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
             : abandoned.count === 1 ? "{n} earlier turn on a branch you navigated away from" : "{n} earlier turns on a branch you navigated away from",
             { n: abandoned.count, b: abandoned.branches })}</summary>
           {abandoned.summary !== null
-            ? <div className="chat-compact-text"><Markdown>{abandoned.summary}</Markdown></div>
+            ? <div className="chat-compact-text"><Markdown complete>{abandoned.summary}</Markdown></div>
             : <p className="chat-abandoned-note">{t("pi kept them in the session file but answers from the branch you chose. Use /tree in the terminal to go back.")}</p>}
         </details>
       )}

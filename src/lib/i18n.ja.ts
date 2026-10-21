@@ -698,6 +698,8 @@ export const JA: Record<string, string> = {
   // ---- markdown ----
   "Code copied": "コードをコピーしました",
   "Copy code": "コードをコピー",
+  "Table copied": "表をコピーしました",
+  "Copy table": "表をコピー",
   "Show less": "折りたたむ",
   "Show all {n} lines": "{n} 行すべて表示",
   "Too long to highlight": "長すぎるため構文ハイライトを省略しました",

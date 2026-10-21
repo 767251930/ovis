@@ -696,6 +696,8 @@ export const KO: Record<string, string> = {
   // ---- markdown ----
   "Code copied": "코드 복사됨",
   "Copy code": "코드 복사",
+  "Table copied": "표 복사됨",
+  "Copy table": "표 복사",
   "Show less": "접기",
   "Show all {n} lines": "{n}줄 모두 보기",
   "Too long to highlight": "너무 길어 강조 표시를 생략했습니다",

@@ -78,6 +78,7 @@ run_script scripts/chat-virtual-browser-qa.ts
 run_script scripts/chat-scroll-padding-regression.ts
 run_script scripts/chat-selection-copy-regression.ts
 run_script scripts/tool-copy-demo-regression.ts
+run_script scripts/markdown-table-copy-demo-regression.ts
 run_script scripts/chat-fallback-browser-qa.ts
 run_script scripts/grok-chat-browser-qa.ts
 run_script scripts/omo-chat-browser-qa.ts
