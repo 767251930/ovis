@@ -574,7 +574,7 @@ export function createServer(
       if (pathname.startsWith(PAGE_MEDIA_PATH)) {
         setRequestRoute("/api/fs/page-media/:media_id");
         if (request.method !== "GET" && request.method !== "HEAD") return badRequest("method_not_allowed", "use GET");
-        const media = pageMediaResponse(pathname.slice(PAGE_MEDIA_PATH.length), client);
+        const media = pageMediaResponse(pathname.slice(PAGE_MEDIA_PATH.length), client, request);
         return media ?? jsonResponse({ error: { code: "not_found", message: "no such page media" } }, 404);
       }
 

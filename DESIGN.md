@@ -425,6 +425,24 @@ blocks of `src/styles.css`.
   size as a dim mono `--fs-xs` line; "Opening…" is a `role="status"` note that is in the document from
   the viewer's first render, clipped and empty (`.visually-hidden`, never `display: none`), and gets its
   words a frame later: a live region that appears together with its content is not announced.
+- A rendered page (Page) looks as before; what changed is where its files come from. The pictures,
+  scripts and stylesheets it takes from its folder, and the videos it plays from this server, are
+  read only from a descriptor whose opened file was shown to lie in the page's folder (or a folder
+  in `HERDR_WEB_MEDIA_ROOTS`) with no hidden name on the way (`openAuthorized` in
+  `server/file-view.ts`). The path is resolved and checked again after the open and must still
+  name the opened file, but a sample of a path is not a proof, so each platform adds its own:
+  Linux checks the kernel's path of the opened file (`/proc/self/fd`), and refuses one it cannot
+  read or that was deleted; macOS requires every folder from that root down to the file's own to
+  be a real folder owned by this server's user with no group or world write bit (`mode & 0o022`
+  is 0), which leaves a race only to this user's own processes, already able to read anything a
+  swap could expose (it is not protection against the same user); Windows keeps the second
+  resolution and the device and inode check only, and does not read access lists, so someone
+  allowed to write a folder on the way could still race it, outside the one-user model this
+  server serves. Other platforms authorize nothing. A video's address replays these checks on
+  every request and plays only while the file has the identity, size and modification time its
+  render saw; it is sent from its descriptor a chunk at a time, Range included, and a size or time
+  change ends it. A write in place that keeps both, and bytes already sent, are not caught. No
+  new UI follows from this, so it names no app precedent.
 - `--line-number` colors the line numbers beside code: tertiary text, quieter than the code. It is
   `--text-dim`, except in Catppuccin, whose `--text-dim` (subtext1) is nearly `--text`: Mocha uses
   overlay2 and Latte subtext0 darkened to stay AA on `--bg`, as set in its blocks of

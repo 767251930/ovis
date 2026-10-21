@@ -2,11 +2,12 @@
 import "./test-herdr.ts";
 import assert from "node:assert/strict";
 import { Database } from "bun:sqlite";
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium, type Locator, type Page } from "playwright-core";
 import { createServer } from "../server/index.ts";
+import { forgetPageMedia, PAGE_MEDIA_LIFETIME_MS, pageFileHooks, pageMediaResponse } from "../server/file-view.ts";
 import { herdrRpc, workspaceClose, workspaceCreate } from "../server/herdr/client.ts";
 import { openSettingsPage } from "./settings-page.ts";
 
@@ -31,6 +32,8 @@ const openFiles = async (page: import("playwright-core").Page) => {
 };
 
 const root = mkdtempSync(join(tmpdir(), "herdr-web-ui-file-back-"));
+/** an unbroken name the viewer's header has to cut short */
+const PINNED_PAGE = "pinned-page-media-recording-review-with-an-unbroken-name-the-header-cuts-short.html";
 const codexHome = join(root, "codex-home");
 const thread = "01a0c7a1-56d9-7e20-9f08-f7a2d973bc11";
 mkdirSync(join(codexHome, "sessions"), { recursive: true });
@@ -51,8 +54,21 @@ writeFileSync(transcript, [
   { type: "response_item", payload: { type: "function_call", name: "exec_command", call_id: "shoot", arguments: JSON.stringify({ cmd: "python3 shoot.py --out shots/report.html" }) } },
   { type: "response_item", payload: { type: "function_call_output", call_id: "shoot", output: `${join(root, "shots", "t00000.png")} (1600, 1000) -> (1255, 960)\nsaved shots/report.html\ndisplay image 1: [image/png]` } },
   { type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: `Shots:\n\n\`\`\`\n${join(root, "shots", "t00000.png")} (1600, 1000) -> (1255, 960)\n\`\`\`` }] } },
-  { type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: "Kinds: [extensionless](./README), [unknown text](./notes.custom), [dotted folder](./folder.txt)." }] } },
+  { type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: `Kinds: [extensionless](./README), [unknown text](./notes.custom), [dotted folder](./folder.txt), [pinned media](./media/${PINNED_PAGE}).` }] } },
 ].map((row) => JSON.stringify(row)).join("\n"));
+// a report with a chart beside it and a recording too large to put into it (server/file-view.ts):
+// the chart is put into the page, the recording plays from the address its render gave out
+mkdirSync(join(root, "media"));
+writeFileSync(join(root, "media", "chart.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="80"><rect width="240" height="80" fill="#2a6f97"/><rect x="16" y="40" width="40" height="28" fill="#f2c14e"/><rect x="72" y="24" width="40" height="44" fill="#f2c14e"/><rect x="128" y="12" width="40" height="56" fill="#f2c14e"/></svg>');
+writeFileSync(join(root, "media", PINNED_PAGE), `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Pinned media</title><style>body{font:16px/1.5 system-ui,sans-serif;margin:16px;color:#1d1d1f;background:#fff}video{display:block;width:100%;max-width:640px;background:#000}#state{font-weight:600}</style><body><h1>Recording review</h1><img id="pic" alt="Chart" src="chart.svg"><p id="picstate">no picture</p><video id="clip" src="clip.webm" muted playsinline controls preload="auto"></video><p>State: <span id="state">loading</span></p><ol>${Array.from({ length: 30 }, (_, index) => `<li>Finding ${index + 1}</li>`).join("")}</ol><p id="end">End of report</p><script>
+const clip = document.getElementById("clip");
+const state = document.getElementById("state");
+document.getElementById("pic").decode().then(() => { document.getElementById("picstate").textContent = "picture drawn"; }, () => {});
+clip.addEventListener("loadedmetadata", () => { state.textContent = "metadata " + clip.duration.toFixed(1); });
+clip.addEventListener("loadeddata", () => { state.textContent = "frame ready"; });
+clip.addEventListener("seeked", () => { state.textContent = "seeked to " + clip.currentTime.toFixed(1) + " s"; });
+clip.addEventListener("error", () => { state.textContent = "media error: the recording could not be loaded"; });
+</script></body>`);
 const db = new Database(join(codexHome, "state_5.sqlite"));
 db.exec("CREATE TABLE threads (id TEXT, rollout_path TEXT, cwd TEXT, archived INTEGER, agent_role TEXT, created_at INTEGER, updated_at INTEGER, source TEXT, first_user_message TEXT)");
 db.query("INSERT INTO threads VALUES (?, ?, ?, 0, NULL, 1, 1, 'cli', ?)").run(thread, transcript, root, "Show me the demo video.");
@@ -1386,6 +1402,249 @@ try {
   assert.equal(await refused.locator(".file-viewer-text").count(), 0);
   console.log("PASS A file whose body is refused shows an error, not the error's JSON");
   assert.deepEqual(errors, []);
+  // a rendered page's own chart and its recording too large to put into it are read from the
+  // descriptors its render authorized: the recording loads, plays, seeks and reloads from its
+  // address, refuses another client, a lapsed or revoked address and a moved file, and every
+  // descriptor closes once the viewer lets go (server/file-view.ts)
+  const clip = join(root, "media", "clip.webm");
+  const encode = Bun.spawn(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=24", "-vf", "noise=alls=60:allf=t", "-t", "8", "-c:v", "libvpx", "-deadline", "realtime", "-cpu-used", "8", "-b:v", "12M", "-minrate", "12M", "-maxrate", "12M", "-bufsize", "12M", "-an", clip], { stdout: "ignore", stderr: "pipe" });
+  assert.equal(await encode.exited, 0, await new Response(encode.stderr).text());
+  assert.ok(statSync(clip).size > 8 * 1024 * 1024, "the recording is too large to put into the page");
+  const live = new Set<number>();
+  let openedCount = 0;
+  let closedTwice = 0;
+  let allClosed: (() => void) | null = null;
+  pageFileHooks.opened = (fd) => { live.add(fd); openedCount += 1; };
+  pageFileHooks.closed = (fd) => {
+    if (!live.delete(fd)) closedTwice += 1;
+    if (live.size === 0) allClosed?.();
+  };
+  const descriptorsClosed = (why: string) => live.size === 0 ? Promise.resolve() : new Promise<void>((done, fail) => {
+    allClosed = done;
+    AbortSignal.timeout(15_000).addEventListener("abort", () => fail(new Error(`${live.size} page media descriptors still open after ${why}`)));
+  });
+  const evidence = process.env.UI_EVIDENCE_DIR;
+  if (evidence) mkdirSync(evidence, { recursive: true });
+  const playback: Record<string, unknown>[] = [];
+  const measured: Record<string, unknown>[] = [];
+  const tokenOf = (address: string) => address.slice(address.lastIndexOf("/") + 1);
+  for (const [width, mobile] of [[390, true], [1440, false]] as const) {
+    for (const theme of ["light", "dark"] as const) {
+      const tag = `${width}-${theme}`;
+      const shoot = async (target: Page, state = "") => {
+        if (evidence) await target.screenshot({ path: join(evidence, `pinned-page-media-${tag}${state ? `-${state}` : ""}.png`) });
+      };
+      const context = await browser.newContext(mobile
+        ? { viewport: { width: 390, height: 844 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true }
+        : { viewport: { width: 1440, height: 900 } });
+      await context.addInitScript((theme) => {
+        if (window.top !== window) return;
+        if (localStorage.getItem("herdr-web-ui:settings") === null) localStorage.setItem("herdr-web-ui:settings", JSON.stringify({ language: "en", theme }));
+      }, theme);
+      const view = await context.newPage();
+      view.setDefaultTimeout(15_000);
+      const failures: string[] = [];
+      view.on("pageerror", (error) => failures.push(error.message));
+      const record: Record<string, unknown> = { width, theme };
+      try {
+        await view.goto(`${origin}/?pane=${encodeURIComponent(pane)}&view=chat`);
+        await view.locator(".conn-live").waitFor();
+        const link = view.getByRole("button", { name: "pinned media", exact: true });
+        const open = async () => { if (mobile) await link.tap(); else await link.click(); };
+        // loading: the page's render held at the server's door until it is captured
+        let release!: () => void;
+        const held = new Promise<void>((done) => { release = done; });
+        let asked!: () => void;
+        const rendering = new Promise<void>((done) => { asked = done; });
+        await view.route((url) => url.pathname === "/api/fs/file" && url.searchParams.get("render") === "1", async (route) => { asked(); await held; await route.continue(); }, { times: 1 });
+        await open();
+        await rendering;
+        await shoot(view, "loading");
+        release();
+        const frame = view.frameLocator(".file-viewer-page");
+        const video = frame.locator("#clip");
+        const state = frame.locator("#state");
+        await frame.getByText("picture drawn", { exact: true }).waitFor();
+        assert.match(await frame.locator("#pic").getAttribute("src") ?? "", /^data:image\/svg\+xml;base64,/, "the chart is put into the page");
+        assert.equal(await view.locator(".file-viewer-page").getAttribute("sandbox"), "allow-scripts");
+        const first = await video.getAttribute("src") ?? "";
+        assert.match(first, new RegExp(`^${origin}/api/fs/page-media/[A-Za-z0-9_-]{32}$`), "the recording plays from its address");
+        await state.filter({ hasText: /^frame ready$/ }).waitFor();
+        record.duration = await video.evaluate((element: HTMLVideoElement) => element.duration);
+        // a frame to show, not the player's spinner
+        const playable = () => video.evaluate((element: HTMLVideoElement) => element.readyState >= 4 || element.networkState === element.NETWORK_IDLE ? undefined : new Promise<void>((done) => {
+          element.addEventListener("canplaythrough", () => done(), { once: true });
+          element.addEventListener("suspend", () => done(), { once: true });
+        }));
+        await playable();
+        await shoot(view, "before-seek");
+        const seek = (to: number) => video.evaluate((element: HTMLVideoElement, to: number) => new Promise<number>((done, fail) => {
+          element.addEventListener("seeked", () => done(element.currentTime), { once: true });
+          element.addEventListener("error", () => fail(new Error(`media error ${element.error?.code}`)), { once: true });
+          element.currentTime = to;
+        }), to);
+        record.seekedTo = await seek(6);
+        await state.filter({ hasText: /^seeked to 6\.0 s$/ }).waitFor();
+        await playable();
+        await shoot(view, "after-seek");
+        record.played = await video.evaluate((element: HTMLVideoElement) => new Promise<number>((done, fail) => {
+          const start = element.currentTime;
+          const moved = () => { if (element.currentTime > start) { element.removeEventListener("timeupdate", moved); element.pause(); done(element.currentTime - start); } };
+          element.addEventListener("timeupdate", moved);
+          element.play().catch(fail);
+        }));
+        assert.ok((record.played as number) > 0, "the recording plays on from where it was sought");
+        // the app's own document scrolls not sideways; the page's end is reachable
+        const sideways = await view.evaluate(() => document.scrollingElement!.scrollWidth - document.scrollingElement!.clientWidth);
+        assert.equal(sideways, 0, `no horizontal scroll at ${tag}`);
+        await frame.locator("#end").scrollIntoViewIfNeeded();
+        await shoot(view, "scroll-end");
+        await frame.locator("h1").scrollIntoViewIfNeeded();
+        // the viewer's own controls: sizes, a hovered one, one reached by the keyboard, one held down
+        const controls = await view.locator(".file-viewer").first().evaluate((viewer) => [...viewer.querySelectorAll(".file-viewer-actions button, .file-viewer-actions a, .file-viewer-close, .segmented button")].filter((element) => (element as HTMLElement).offsetParent !== null).map((element) => {
+          const box = element.getBoundingClientRect();
+          return { name: element.getAttribute("aria-label") ?? element.textContent?.trim() ?? "", header: element.closest(".segmented") === null, width: Math.round(box.width * 10) / 10, height: Math.round(box.height * 10) / 10, disabled: (element as HTMLButtonElement).disabled === true || element.getAttribute("aria-disabled") === "true" };
+        }));
+        // the header's own controls take a thumb at 390
+        if (mobile) for (const control of controls.filter((entry) => entry.header)) assert.ok(control.width >= 44 && control.height >= 44, `${control.name} is ${control.width}x${control.height} at ${tag}`);
+        const disabledCount = controls.filter((control) => control.disabled).length;
+        const firstAction = view.locator(".file-viewer-actions").first().locator("button:visible, a:visible").first();
+        if (!mobile) {
+          await firstAction.hover();
+          await shoot(view, "hover");
+        }
+        let focus: Record<string, unknown> | null = null;
+        await view.locator(".file-viewer-page").focus();
+        for (let presses = 0; presses < 40 && focus === null; presses += 1) {
+          await view.keyboard.press("Shift+Tab");
+          focus = await view.evaluate(() => {
+            const active = document.activeElement as HTMLElement | null;
+            if (!active?.closest(".file-viewer-actions, .file-viewer-head, .file-viewer header")) return null;
+            const style = getComputedStyle(active);
+            return { name: active.getAttribute("aria-label") ?? active.textContent?.trim() ?? "", focusVisible: active.matches(":focus-visible"), outlineStyle: style.outlineStyle, outlineWidth: style.outlineWidth, outlineColor: style.outlineColor, boxShadow: style.boxShadow };
+          });
+        }
+        assert.ok(focus !== null && focus.focusVisible === true, `a header control takes keyboard focus visibly at ${tag}`);
+        await shoot(view, "focus-visible");
+        await view.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+        const source = view.getByRole("button", { name: "Source", exact: true });
+        const box = await source.boundingBox();
+        assert.ok(box !== null);
+        await view.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+        await view.mouse.down();
+        await shoot(view, "pressed");
+        await view.mouse.move(2, 2);
+        await view.mouse.up();
+        assert.equal(await view.getByRole("button", { name: "Page", exact: true }).getAttribute("aria-pressed"), "true", "a press released elsewhere changes nothing");
+        // the header's colors, measured: AA for its name and meta line
+        const contrast = await view.locator(".file-viewer").first().evaluate((viewer) => {
+          const rgb = (value: string) => (value.match(/[\d.]+/g) ?? []).map(Number);
+          const background = (element: Element | null): number[] => {
+            for (let node = element; node; node = node.parentElement) {
+              const [r, g, b, a = 1] = rgb(getComputedStyle(node).backgroundColor);
+              if (a > 0.5) return [r!, g!, b!];
+            }
+            return [255, 255, 255];
+          };
+          const luminance = ([r, g, b]: number[]) => [r!, g!, b!].map((channel) => { const c = channel / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; }).reduce((sum, c, index) => sum + c * [0.2126, 0.7152, 0.0722][index]!, 0);
+          return [...viewer.querySelectorAll(".file-viewer-name, .file-viewer-meta, .file-viewer-title")].slice(0, 4).map((element) => {
+            const fg = rgb(getComputedStyle(element).color);
+            const bg = background(element);
+            const [light, dark] = [luminance(fg), luminance(bg)].sort((a, b) => b - a);
+            return { selector: element.className, text: (element.textContent ?? "").slice(0, 40), fontSize: getComputedStyle(element).fontSize, ratio: Math.round(((light! + 0.05) / (dark! + 0.05)) * 100) / 100, clipped: (element as HTMLElement).scrollWidth > (element as HTMLElement).clientWidth };
+          });
+        });
+        for (const entry of contrast) assert.ok(entry.ratio >= 4.5, `${entry.selector} at ${tag}: contrast ${entry.ratio}`);
+        // the recording's file moved away: its address refuses, the page says so; put back, it plays again
+        renameSync(clip, `${clip}.moved`);
+        // asked again by the same address: a query of its own, so Chrome's media cache cannot answer for the server
+        let reloads = 0;
+        const reload = () => video.evaluate((element: HTMLVideoElement, attempt: number) => new Promise<string>((done) => {
+          const settle = (outcome: string) => () => { element.removeEventListener("error", failed); element.removeEventListener("loadeddata", loaded); done(outcome); };
+          const failed = settle("error");
+          const loaded = settle("loaded");
+          element.addEventListener("error", failed);
+          element.addEventListener("loadeddata", loaded);
+          const address = new URL(element.getAttribute("src")!);
+          address.search = `?reload=${attempt}`;
+          element.src = address.href;
+        }), reloads += 1);
+        record.movedFile = await reload();
+        assert.equal(record.movedFile, "error", "a moved recording is refused");
+        await state.filter({ hasText: /^media error/ }).waitFor();
+        await shoot(view, "missing-media");
+        renameSync(`${clip}.moved`, clip);
+        record.restoredFile = await reload();
+        assert.equal(record.restoredFile, "loaded", "the same file put back plays again");
+        // another client given the address, from outside, is answered like a guess
+        const fromPage = { "sec-fetch-site": "cross-site", "sec-fetch-mode": "no-cors", "sec-fetch-dest": "video" };
+        const other = await fetch(first, { headers: { ...fromPage, "x-forwarded-for": "203.0.113.9", range: "bytes=0-1" } });
+        record.otherClient = other.status;
+        assert.equal(other.status, 404);
+        const own = await fetch(first, { headers: { ...fromPage, range: "bytes=0-1" } });
+        record.ownClient = [own.status, own.headers.get("content-range")];
+        assert.equal(own.status, 206);
+        await own.arrayBuffer();
+        // cancelled: the viewer closed while the recording streams lets go of every descriptor
+        const closeViewer = async () => {
+          if (mobile) await view.getByRole("button", { name: "Close file", exact: true }).first().tap();
+          else await view.getByRole("button", { name: "Close file", exact: true }).first().click();
+          await view.locator(".file-viewer-page").waitFor({ state: "detached" });
+        };
+        await video.evaluate((element: HTMLVideoElement) => element.play());
+        await closeViewer();
+        await descriptorsClosed("the viewer closed");
+        record.openAfterCancel = live.size;
+        await shoot(view, "cancelled");
+        // reloaded: a new render gives a new address, which plays
+        await view.reload();
+        await view.locator(".conn-live").waitFor();
+        await open();
+        await state.filter({ hasText: /^frame ready$/ }).waitFor();
+        const second = await video.getAttribute("src") ?? "";
+        assert.notEqual(second, first, "a new render gives a new address");
+        record.reloadedAddressDiffers = second !== first;
+        await shoot(view, "reloaded");
+        // lapsed: past its lifetime the address plays no more
+        const client = ["127.0.0.1", "::1", "::ffff:127.0.0.1"].find((candidate) => {
+          const response = pageMediaResponse(tokenOf(second), candidate, new Request(second, { method: "HEAD" }));
+          return response !== null;
+        }) ?? null;
+        assert.notEqual(client, null, "the address answers the client that rendered it");
+        assert.equal(pageMediaResponse(tokenOf(second), client, null, Date.now() + PAGE_MEDIA_LIFETIME_MS + 1), null);
+        record.expired = await reload();
+        assert.equal(record.expired, "error", "a lapsed address is refused");
+        await state.filter({ hasText: /^media error/ }).waitFor();
+        await shoot(view, "expired-media");
+        // revoked: the client signed out, its addresses go with it
+        await closeViewer();
+        await view.reload();
+        await view.locator(".conn-live").waitFor();
+        await open();
+        await state.filter({ hasText: /^frame ready$/ }).waitFor();
+        forgetPageMedia({ client });
+        record.revoked = await reload();
+        assert.equal(record.revoked, "error", "a revoked address is refused");
+        await state.filter({ hasText: /^media error/ }).waitFor();
+        await shoot(view, "revoked");
+        assert.deepEqual(failures, []);
+        measured.push({ tag, width, theme, sideways, controls, disabledControls: disabledCount, focus, contrast });
+      } finally {
+        await context.close();
+      }
+      await descriptorsClosed(`the ${tag} context closed`);
+      playback.push(record);
+    }
+  }
+  assert.equal(live.size, 0, "every page media descriptor closed");
+  assert.equal(closedTwice, 0, "no page media descriptor closed twice");
+  if (evidence) {
+    writeFileSync(join(evidence, "pinned-page-media-playback.json"), JSON.stringify({ descriptorsOpened: openedCount, descriptorsOpenAtEnd: live.size, closedTwice, playback }, null, 2));
+    writeFileSync(join(evidence, "pinned-page-media-measurements.json"), JSON.stringify(measured, null, 2));
+  }
+  delete pageFileHooks.opened;
+  delete pageFileHooks.closed;
+  console.log("PASS A rendered page's chart and recording come from their authorized descriptors: played, sought, reloaded, refused when moved, lapsed, revoked or asked by another client, and closed when the viewer lets go");
 } finally {
   await browser?.close();
   server?.stop();

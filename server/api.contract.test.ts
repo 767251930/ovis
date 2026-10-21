@@ -25,6 +25,7 @@ import { TailnetIdentitySource } from "./tailscale.ts";
 import { forgetTranscriptState } from "./conversation.ts";
 import type { RepoDiffFileList, RepoDiffFilePatch, SessionHistoryResponse } from "../shared/protocol.ts";
 import { PendingInputError, PendingInputs } from "./pending-input.ts";
+import { pageFileHooks } from "./file-view.ts";
 
 /**
  * Contract test for herdr-web-ui's HTTP + WS surface.
@@ -3752,4 +3753,63 @@ describe("GET /api/sessions/history", () => {
       rmSync(root, { recursive: true, force: true });
     }
   }, 20_000);
+});
+
+describe("GET /api/fs/page-media/:media_id", () => {
+  it("passes the request's Range and method through, and closes each descriptor once", async () => {
+    const root = mkdtempSync(join(tmpdir(), "herdr-web-ui-page-media-range-"));
+    const app = createServer({ port: 0, hostname: "127.0.0.1", token: "", stateDir: join(root, "state") });
+    const live = new Set<number>();
+    const twice: number[] = [];
+    const waiting = new Map<number, () => void>();
+    pageFileHooks.opened = (fd) => { live.add(fd); };
+    pageFileHooks.closed = (fd) => { if (!live.delete(fd)) twice.push(fd); waiting.get(fd)?.(); waiting.delete(fd); };
+    let last = -1;
+    const opened = pageFileHooks.opened;
+    pageFileHooks.opened = (fd) => { opened(fd); last = fd; };
+    const closed = (fd: number) => new Promise<void>((done) => { if (!live.has(fd)) done(); else waiting.set(fd, done); });
+    try {
+      const size = 9 * 1024 * 1024;
+      const bytes = Buffer.alloc(size);
+      for (let index = 0; index < size; index += 1) bytes[index] = index % 251;
+      writeFileSync(join(root, "clip.mp4"), bytes);
+      writeFileSync(join(root, "page.html"), `<video src="clip.mp4"></video>`);
+      const base = `http://127.0.0.1:${app.port}`;
+      const page = await fetch(`${base}/api/fs/file?path=${encodeURIComponent(join(root, "page.html"))}&render=1`);
+      expect(page.status).toBe(200);
+      const address = /src="(http:\/\/[^"]+\/api\/fs\/page-media\/[A-Za-z0-9_-]{32})"/.exec(await page.text())![1]!;
+      const fromPage = { "sec-fetch-site": "cross-site", "sec-fetch-mode": "no-cors", "sec-fetch-dest": "video" };
+      // no range: the whole file
+      const full = await fetch(address, { headers: fromPage });
+      expect(full.status).toBe(200);
+      expect(full.headers.get("accept-ranges")).toBe("bytes");
+      expect(Buffer.from(await full.arrayBuffer()).equals(bytes)).toBe(true);
+      await closed(last);
+      // a closed, an open and a suffix range, each exactly
+      for (const [range, start, end] of [["bytes=10-19", 10, 19], [`bytes=${size - 7}-`, size - 7, size - 1], ["bytes=-5", size - 5, size - 1]] as const) {
+        const part = await fetch(address, { headers: { ...fromPage, range } });
+        expect(part.status).toBe(206);
+        expect(part.headers.get("content-range")).toBe(`bytes ${start}-${end}/${size}`);
+        expect(part.headers.get("content-length")).toBe(String(end - start + 1));
+        expect(Buffer.from(await part.arrayBuffer()).equals(bytes.subarray(start, end + 1))).toBe(true);
+        await closed(last);
+      }
+      // HEAD: the headers of the answer, no body
+      const head = await fetch(address, { method: "HEAD", headers: { ...fromPage, range: "bytes=0-1" } });
+      expect(head.status).toBe(206);
+      expect(head.headers.get("content-range")).toBe(`bytes 0-1/${size}`);
+      expect((await head.arrayBuffer()).byteLength).toBe(0);
+      // past the end
+      const refused = await fetch(address, { headers: { ...fromPage, range: `bytes=${size}-` } });
+      expect(refused.status).toBe(416);
+      expect(refused.headers.get("content-range")).toBe(`bytes */${size}`);
+      expect(live.size).toBe(0);
+      expect(twice).toEqual([]);
+    } finally {
+      delete pageFileHooks.opened;
+      delete pageFileHooks.closed;
+      app.stop();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
