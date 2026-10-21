@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import { parseMarkdown, type InlineNode } from "./markdown.ts";
-import { marked } from "marked";
 import { renderedClipboardPayload, serializeMarkdownTable, type ClipboardNode, type MarkdownTable } from "./markdownClipboard.ts";
 
 const text = (value: string): ClipboardNode => ({ tag: "", text: value });
@@ -164,9 +163,13 @@ describe("serializeMarkdownTable", () => {
     expect(table(serializeMarkdownTable(cells([[text("h")], [text("i")], [text("j")]], [[marks, [], [text(long)]]]))).rows[0]).toEqual([marks, [], [text(long)]]);
   });
 
-  /** Each cell of the copied table's one row as a GFM reader renders it: inner HTML, in order. */
+  /**
+   * Each cell of the copied table's one row as a GFM reader (Bun's own, with GFM's autolinks)
+   * renders it: inner HTML, in order, in one spelling of it (an apostrophe as `&#39;`, a void tag
+   * closed without ` /`), so an expectation says what is shown, not how a reader writes HTML.
+   */
   const readBack = (gfm: string): string[] => {
-    const html = marked.parse(gfm, { async: false, gfm: true });
+    const html = Bun.markdown.html(gfm, { autolinks: true }).replaceAll("'", "&#39;").replaceAll(" />", ">");
     const body = /<tbody>([\s\S]*)<\/tbody>/.exec(html)?.[1] ?? "";
     return [...body.matchAll(/<td>([\s\S]*?)<\/td>/g)].map((cell) => cell[1]!);
   };
