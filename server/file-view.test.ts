@@ -646,7 +646,8 @@ describe("page files read through the descriptor that was validated", () => {
     expect(drawn(await render(page, null)).picture).toBe(false);
   });
 
-  it("reads a page's file and plays its video from the authorized descriptor after its path is swapped", async () => {
+  // Windows refuses to rename a folder while a file in it is open, so the swap cannot be staged there
+  it.skipIf(windows)("reads a page's file and plays its video from the authorized descriptor after its path is swapped", async () => {
     const { root, sub, outside, page } = layout();
     // embedded: the path swapped between authorization and the read
     let swapped = false;
