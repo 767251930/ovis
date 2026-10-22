@@ -267,6 +267,8 @@ try {
   assert.equal(await page.evaluate(() => (window as unknown as { testDocument: string }).testDocument), "same-document");
   assert.equal(await page.evaluate(() => history.state.testMarker), "preserved");
   await videoLink.waitFor();
+  // a closed sheet's drop is drawn in an inert host of its own until it has slid out (src/lib/sheets.ts)
+  await page.waitForFunction(() => document.body.querySelector(":scope > div[inert][aria-hidden='true']") === null);
   if (process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "mobile-back-to-chat.png") });
   console.log("PASS mobile Back closes a playable video and preserves the chat document and draft");
 
