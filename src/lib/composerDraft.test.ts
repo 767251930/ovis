@@ -249,6 +249,28 @@ it("held text that reads unreadable stays recoverable", () => {
   expect(recoverDraft(record!, "line", current, false, stores)).toBe("recovered");
   expect(stores.line.read(current)).toBe("unreadable");
 });
+it("recovery acts only on the version of a record it listed", () => {
+  const { data, storage, store, stores } = device();
+  const now = Date.now();
+  const source = composerDraftKey(paneStateOwner("local", "w1:p1", "lifetime-a"));
+  const current = paneStateOwner("local", "w1:p1", "lifetime-b");
+  const lifetimes = new Map([["local", "lifetime-b"]]);
+  data.set(source, "shown in recovery");
+  const [shown] = recoverableDrafts(storage, lifetimes, now);
+  // another tab still on herdr A writes newer text under the same key
+  new ComposerDraftStore(() => storage).set(source, "newer, from another tab");
+  expect(recoverDraft(shown!, "message", current, false, stores)).toBe("changed");
+  expect(discardDraft(shown!, stores)).toBe("changed");
+  // neither the newer text nor the current box was touched
+  expect(data.get(source)).toBe("newer, from another tab");
+  expect(store.read(composerDraftKey(current)).text).toBe("");
+  // listed again, the newer version is the one recovered
+  const [fresh] = recoverableDrafts(storage, lifetimes, now);
+  expect(fresh!.text).toBe("newer, from another tab");
+  expect(recoverDraft(fresh!, "message", current, false, stores)).toBe("recovered");
+  expect(store.read(composerDraftKey(current)).text).toBe("newer, from another tab");
+  expect(data.has(source)).toBe(false);
+});
 it("recovery requires explicit destination choice", () => {
   const { data, storage, store, stores } = device();
   const now = Date.now();

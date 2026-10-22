@@ -234,12 +234,13 @@
   font-size: var(--fs-md);
 }
 
-/* Recover waits for a box to be picked: an outlined button whose label stays readable, rather than
-   the faded fill a disabled button takes elsewhere (styles.css) */
+/* Recover waits for a box to be picked: an outlined button whose label and edge stay readable
+   (text-dim clears 4.5:1, so its edge clears 3:1 too), rather than the faded fill a disabled button
+   takes elsewhere (styles.css) */
 .draft-recovery .btn-primary:disabled {
   opacity: 1;
   background: transparent;
-  border-color: var(--border-strong);
+  border-color: var(--text-dim);
   color: var(--text-dim);
 }
 
@@ -302,8 +303,15 @@
   }
 }
 
+/* reduced motion: the detail still fades in, without moving (the rows fade too: DraftRecovery.tsx) */
 @media (prefers-reduced-motion: reduce) {
   .draft-recovery-detail {
-    transition: none;
+    transition: opacity var(--dur-base) var(--ease-out);
+  }
+
+  @starting-style {
+    .draft-recovery-detail {
+      translate: none;
+    }
   }
 }

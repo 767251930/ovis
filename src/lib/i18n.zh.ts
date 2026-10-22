@@ -1455,4 +1455,6 @@ export const ZH: Record<string, string> = {
   "Recovered into the terminal input line. Nothing was sent.": "已恢复到终端输入行。没有发送任何内容。",
   "Discarded.": "已丢弃。",
   "Too long for this box. Choose the other one, or discard it.": "对这个输入框来说太长了。请选择另一个，或丢弃它。",
+  "This pane is now in another herdr. Pick the text and the box again.": "这个面板现在属于另一个 herdr。请重新选择文本和输入框。",
+  "This text changed in another tab. Look at it again before you recover it.": "这段文本已在另一个标签页中更改。恢复前请再看一遍。",
 };

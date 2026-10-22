@@ -663,6 +663,95 @@ async function mounted(browser: Browser, base: string): Promise<void> {
   } finally { await context.close(); }
 }
 
+/**
+ * Recover unsent text while what it acts on changes under it: another herdr comes behind the pane
+ * while a replacement waits to be confirmed, and another tab still on herdr A writes the record
+ * the dialog shows.
+ */
+async function recoveryRaces(browser: Browser, base: string): Promise<void> {
+  const S = "ambiguous-and-late-drafts";
+  const C = "demo-herdr-local-third";
+  const context = await newContext(browser, { width: 1440, phone: false, theme: "dark", language: "en" });
+  try {
+    const page = await context.newPage();
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await page.goto(`${base}?pane=${encodeURIComponent(AGENT)}`);
+    await page.evaluate((entries) => { for (const [key, value] of entries) localStorage.setItem(key, value); },
+      // the chat in every lifetime here, so the message box stays mounted across each change
+      [[draftKey(AGENT, A), "A: recover me"], [draftKey(AGENT, C), "C: keep this unsent text"],
+        [lensKey(AGENT, A), "chat"], [lensKey(AGENT, B), "chat"], [lensKey(AGENT, C), "chat"]] as [string, string][]);
+    await restartBridge(page, { local: B }, AGENT, base);
+    await lensIs(page, "chat");
+    await valueIs(page, ".composer-text", "");
+    await composer(page).fill("B: current draft");
+    await valueIs(page, ".composer-text", "B: current draft");
+    const framesBefore = await inputFrames(page);
+
+    // 1. a replacement confirmed for B's box, with herdr C behind the pane before Replace is pressed
+    await openRecovery(page);
+    await pick(rows(page).filter({ hasText: "A: recover me" }));
+    await dialog(page).getByRole("radio", { name: "Message box" }).check();
+    await dialog(page).getByRole("button", { name: "Recover", exact: true }).click();
+    const confirmation = dialog(page).locator(".draft-recovery-confirm");
+    await confirmation.waitFor();
+    // every frame drawn from here: none shows C's box with B's confirmation still offered
+    await page.evaluate(() => {
+      const view = window as unknown as { staleFrames: number; watchFrames: boolean };
+      view.staleFrames = 0;
+      view.watchFrames = true;
+      const tick = (): void => {
+        if (!view.watchFrames) return;
+        if (document.querySelector<HTMLTextAreaElement>(".composer-text")?.value === "C: keep this unsent text" && document.querySelector(".draft-recovery-confirm")) view.staleFrames += 1;
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    });
+    await publishLifetime(page, C);
+    await valueIs(page, ".composer-text", "C: keep this unsent text");
+    await dialog(page).getByText("This pane is now in another herdr. Pick the text and the box again.").waitFor();
+    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    const staleFrames = await page.evaluate(() => { const view = window as unknown as { staleFrames: number; watchFrames: boolean }; view.watchFrames = false; return view.staleFrames; });
+    assert.equal(staleFrames, 0, "no frame offers B's confirmation over C's box");
+    assert.equal(await confirmation.count(), 0);
+    assert.equal(await dialog(page).getByRole("button", { name: "Replace", exact: true }).count(), 0);
+    assert.equal(await dialog(page).locator(".draft-recovery-row[aria-pressed='true']").count(), 0, "the pick is dropped too");
+    assert.equal(await stored(page, draftKey(AGENT, C)), "C: keep this unsent text", "C's text is untouched");
+    assert.equal(await stored(page, draftKey(AGENT, A)), "A: recover me", "A's record is kept");
+    assert.equal(await stored(page, draftKey(AGENT, B)), "B: current draft");
+    pass(S, "a replacement herdr while Replace waits drops the pick, the box and the confirmation in the same render; nothing is written", { staleFrames });
+
+    // 2. another tab still on herdr A writes the record this dialog shows
+    await page.evaluate(([key]) => localStorage.setItem(key!, "A: shown in recovery"), [draftKey(AGENT, A)]);
+    await closeRecovery(page);
+    await openRecovery(page);
+    await pick(rows(page).filter({ hasText: "A: shown in recovery" }));
+    await dialog(page).getByRole("radio", { name: "Message box" }).check();
+    const other = await context.newPage();
+    other.on("pageerror", (error) => errors.push(error.message));
+    await openPane(other, base, AGENT);
+    await valueIs(other, ".composer-text", "A: shown in recovery");
+    await composer(other).fill("A: newer, from another tab");
+    await page.waitForFunction((key) => localStorage.getItem(key) === "A: newer, from another tab", draftKey(AGENT, A), { timeout: 10_000 });
+    await dialog(page).getByText("This text changed in another tab. Look at it again before you recover it.").waitFor();
+    assert.equal(await dialog(page).locator(".draft-recovery-detail").count(), 0, "the picked version is no longer offered");
+    assert.equal(await stored(page, draftKey(AGENT, C)), "C: keep this unsent text");
+    // listed again as it now is: the newer text is what is recovered, after the second choice
+    await pick(rows(page).filter({ hasText: "A: newer, from another tab" }));
+    await dialog(page).getByRole("radio", { name: "Message box" }).check();
+    await dialog(page).getByRole("button", { name: "Recover", exact: true }).click();
+    await dialog(page).getByRole("button", { name: "Replace", exact: true }).click();
+    await dialog(page).getByText("Recovered into the message box. Nothing was sent.").waitFor();
+    await closeRecovery(page);
+    await valueIs(page, ".composer-text", "A: newer, from another tab");
+    assert.equal(await stored(page, draftKey(AGENT, A)), null);
+    assert.equal(await inputFrames(page), framesBefore, "nothing is sent");
+    await other.close();
+    pass(S, "another tab's newer text for the shown record drops the pick; the newer text is never deleted unseen and is what Recover copies");
+    assert.deepEqual(errors, []);
+  } finally { await context.close(); }
+}
+
 /** The capture set (UI_EVIDENCE_DIR): every recovery state at 390 (iPhone 14) and 1440, light and dark, Korean at 390. */
 async function captures(browser: Browser, base: string, dir: string): Promise<void> {
   mkdirSync(dir, { recursive: true });
@@ -672,6 +761,11 @@ async function captures(browser: Browser, base: string, dir: string): Promise<vo
     { width: 390, phone: true, theme: "light", language: "ko" }, { width: 390, phone: true, theme: "dark", language: "ko" },
   ] as const;
   const long = `${"unbroken-path/".repeat(12)}${"a".repeat(180)} and a second line\nwith more words to wrap over the width of the dialog`;
+  // a key that names no PC (Unknown PC), a line past any box (too large), and one past the message box alone
+  const UNKNOWN = "herdr-web-ui:composer-draft:pane-state:v9:unreadable-owner";
+  const TOO_LARGE = lineKey(panes.hermes, A);
+  const TOO_LONG = lineKey(panes.web, A);
+  const tooLong = "A terminal line longer than the message box takes. ".repeat(400);
   for (const variant of variants) {
     const context = await newContext(browser, variant);
     try {
@@ -689,10 +783,26 @@ async function captures(browser: Browser, base: string, dir: string): Promise<vo
         [`herdr-web-ui:composer-draft:${panes.hermes}`, "A draft from before drafts were kept per herdr"],
         [heldKey(panes.omp, A), "{broken"],
         [draftKey(AGENT, "demo-herdr-laptop-old", "laptop"), "Laptop draft for the release notes"],
+        [UNKNOWN, "a record whose key names no PC"],
+        [TOO_LARGE, "x".repeat(40_000)],
+        [TOO_LONG, tooLong],
+        // this pane's terminal input line under B already holds text: a recovery into it asks first
+        [lineKey(AGENT, B), "echo typed under B"],
       ]] as const);
       const page = await context.newPage();
       const name = (state: string): string => join(dir, `pane-recovery-${variant.width}-${variant.theme}${variant.language === "ko" ? "-ko" : ""}-${state}.png`);
-      const shot = async (state: string): Promise<void> => { await page.screenshot({ path: name(state), animations: "disabled", caret: "hide" }); };
+      // the dialog's body glides what opens into view: a frame is taken once it has stood still three frames
+      const scrollStill = async (): Promise<void> => {
+        await page.evaluate(() => { const view = window as unknown as { lastTop?: number; stillFrames: number }; delete view.lastTop; view.stillFrames = 0; });
+        await page.waitForFunction(() => {
+          const view = window as unknown as { lastTop?: number; stillFrames: number };
+          const top = document.querySelector(".draft-recovery-body")?.scrollTop ?? 0;
+          view.stillFrames = view.lastTop === top ? view.stillFrames + 1 : 0;
+          view.lastTop = top;
+          return view.stillFrames >= 3;
+        }, undefined, { polling: "raf", timeout: 10_000 });
+      };
+      const shot = async (state: string): Promise<void> => { await scrollStill(); await page.screenshot({ path: name(state), animations: "disabled", caret: "hide" }); };
       await page.goto(`${base}?pane=${encodeURIComponent(AGENT)}`);
       const box = page.locator(".draft-recovery");
       const card = (text: string) => box.locator(".draft-recovery-item").filter({ hasText: text }).locator(".draft-recovery-row");
@@ -757,12 +867,42 @@ async function captures(browser: Browser, base: string, dir: string): Promise<vo
       await shot("recovered");
       await card("unbroken-path").click();
       await shot("long");
-      await box.locator(".draft-recovery-item:has(.is-problem) .draft-recovery-row").first().click();
+      const item = (key: string) => box.locator(`li[data-key="${key}"]`);
+      const open = async (key: string): Promise<void> => {
+        await item(key).locator(".draft-recovery-row").click();
+        await item(key).locator(".draft-recovery-detail").waitFor();
+      };
+      await open(heldKey(panes.omp, A));
       await box.locator(".draft-recovery-problem").waitFor();
       await shot("error");
       await box.locator(".draft-recovery-actions .btn-danger").click();
       await box.locator(".draft-recovery-note").filter({ hasText: /./ }).waitFor();
       await shot("discarded");
+      // a record whose key names no PC: Unknown PC, discard-only
+      await open(UNKNOWN);
+      await shot("unknown-pc");
+      // past what any box holds: discard-only
+      await open(TOO_LARGE);
+      await item(TOO_LARGE).locator(".draft-recovery-problem").waitFor();
+      await shot("too-large");
+      // more than the message box takes: nothing is cut, and the other box is still offered
+      await open(TOO_LONG);
+      await item(TOO_LONG).getByRole("radio").nth(0).check();
+      await item(TOO_LONG).locator(".draft-recovery-actions .btn-primary").click();
+      await box.locator(".draft-recovery-note").filter({ hasText: /./ }).waitFor();
+      await shot("too-long");
+      // into a terminal input line that already holds text: asked first, then recovered
+      const shellLine = lineKey(SHELL, A);
+      await open(shellLine);
+      await item(shellLine).getByRole("radio").nth(1).check();
+      await item(shellLine).locator(".draft-recovery-actions .btn-primary").click();
+      await item(shellLine).locator(".draft-recovery-confirm").waitFor();
+      await shot("line-confirm");
+      await item(shellLine).locator(".draft-recovery-confirm .btn-danger").click();
+      await item(shellLine).waitFor({ state: "detached" });
+      await box.locator(".draft-recovery-note").filter({ hasText: /./ }).waitFor();
+      await shot("line-recovered");
+      assert.equal(await page.evaluate((key) => localStorage.getItem(key), lineKey(AGENT, B)), "make deploy ENV=staging");
       // every record discarded: the empty list
       while (await box.locator(".draft-recovery-row").count() > 0) {
         await box.locator(".draft-recovery-row").first().click();
@@ -810,6 +950,7 @@ try {
       await happy(browser, base);
       await failure(browser, base);
       await mounted(browser, base);
+      await recoveryRaces(browser, base);
       if (evidence) await captures(browser, base, evidence);
     } finally { await browser.close(); }
   } finally { server.stop(); }

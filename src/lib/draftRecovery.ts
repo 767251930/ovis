@@ -27,6 +27,11 @@ export interface RecoveryRecord {
   text: string;
   /** unreadable: not a draft this app wrote; too_large: past what its box ever holds */
   problem: "unreadable" | "too_large" | null;
+  /**
+   * the stored value it was listed from: Recover and Discard act on this version only, so text
+   * another tab wrote under the key since is never recovered unseen or deleted
+   */
+  raw: string;
 }
 
 const HELD_PREFIX = "herdr-web-ui:terminal-draft:";
@@ -100,7 +105,7 @@ export function recoverableDrafts(storage: Pick<Storage, "length" | "key" | "get
       if (held === "unreadable") { problem = "unreadable"; text = ""; } else text = held.text;
     }
     if (problem === null && text.length > LIMITS[source]) problem = "too_large";
-    records.push({ key, source, ...(place ?? { machine_id: "", pane_id: "" }), origin, text: problem === null ? inertText(text) : "", problem });
+    records.push({ key, source, ...(place ?? { machine_id: "", pane_id: "" }), origin, text: problem === null ? inertText(text) : "", problem, raw });
   }
   const rank = (record: RecoveryRecord): number => first && record.machine_id === first.machine_id && record.pane_id === first.pane_id ? 0 : 1;
   return records.sort((a, b) => rank(a) - rank(b) || a.machine_id.localeCompare(b.machine_id) || a.pane_id.localeCompare(b.pane_id) || a.key.localeCompare(b.key));
@@ -108,7 +113,7 @@ export function recoverableDrafts(storage: Pick<Storage, "length" | "key" | "get
 
 /** Where recovery reads and writes; the app's own stores unless a test gives its own. */
 export interface RecoveryStores {
-  storage: () => Pick<Storage, "removeItem">;
+  storage: () => Pick<Storage, "getItem" | "removeItem">;
   composer: Pick<ComposerDraftStore, "read" | "set">;
   line: { read(owner: string): string; write(owner: string, text: string): void };
 }
@@ -120,9 +125,16 @@ const appStores: RecoveryStores = {
 
 /**
  * choose_destination: no box was picked; confirm_replace: the box holds text, and only a second
- * choice (`replace`) puts this over it; too_long: more than that box takes, nothing is cut.
+ * choice (`replace`) puts this over it; too_long: more than that box takes, nothing is cut;
+ * changed: the record is no longer the version listed (another tab wrote or removed it), and
+ * nothing was done: list it again.
  */
-export type RecoverOutcome = "recovered" | "choose_destination" | "confirm_replace" | "too_long" | "unreadable";
+export type RecoverOutcome = "recovered" | "choose_destination" | "confirm_replace" | "too_long" | "unreadable" | "changed";
+
+/** True while the record's key still holds the version it was listed from. */
+function unchanged(record: RecoveryRecord, stores: RecoveryStores): boolean {
+  try { return stores.storage().getItem(record.key) === record.raw; } catch { return false; }
+}
 
 /**
  * Copies a record into a current box of `owner` (paneStateOwner) at the user's choice, then
@@ -131,17 +143,25 @@ export type RecoverOutcome = "recovered" | "choose_destination" | "confirm_repla
 export function recoverDraft(record: RecoveryRecord, destination: RecoveryDestination | null, owner: string, replace: boolean, stores: RecoveryStores = appStores): RecoverOutcome {
   if (destination === null) return "choose_destination";
   if (record.problem !== null) return "unreadable";
+  if (!unchanged(record, stores)) return "changed";
   if (record.text.length > DESTINATION_LIMITS[destination]) return "too_long";
   const current = destination === "message" ? stores.composer.read(composerDraftKey(owner)).text : stores.line.read(owner);
   if (current !== "" && !replace) return "confirm_replace";
   if (destination === "message") stores.composer.set(composerDraftKey(owner), record.text);
   else stores.line.write(owner, record.text);
-  discardDraft(record, stores);
+  removeRecord(record, stores);
   return "recovered";
 }
 
+/** Removes this one record, as listed: a newer version another tab wrote under its key stays (`changed`). */
+export function discardDraft(record: RecoveryRecord, stores: RecoveryStores = appStores): "discarded" | "changed" {
+  if (!unchanged(record, stores)) return "changed";
+  removeRecord(record, stores);
+  return "discarded";
+}
+
 /** Removes this one record, wherever this page also keeps it. */
-export function discardDraft(record: RecoveryRecord, stores: RecoveryStores = appStores): void {
+function removeRecord(record: RecoveryRecord, stores: RecoveryStores): void {
   if (record.source === "message") stores.composer.set(record.key, "");
   else if (record.source === "line") stores.line.write(record.key.slice(TERMINAL_LINE_PREFIX.length), "");
   try { stores.storage().removeItem(record.key); } catch { /* private mode: nothing was stored */ }

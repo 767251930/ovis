@@ -1453,4 +1453,6 @@ export const JA: Record<string, string> = {
   "Recovered into the terminal input line. Nothing was sent.": "ターミナルの入力行に復元しました。何も送信していません。",
   "Discarded.": "破棄しました。",
   "Too long for this box. Choose the other one, or discard it.": "この入力欄には長すぎます。もう一方を選ぶか、破棄してください。",
+  "This pane is now in another herdr. Pick the text and the box again.": "このパネルは別の herdr に移りました。テキストと入力欄を選び直してください。",
+  "This text changed in another tab. Look at it again before you recover it.": "このテキストは別のタブで変更されました。復元する前にもう一度確認してください。",
 };
