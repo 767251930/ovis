@@ -2,7 +2,7 @@
 import "./test-herdr.ts";
 import assert from "node:assert/strict";
 import { Database } from "bun:sqlite";
-import { chmodSync, closeSync, constants, copyFileSync, mkdirSync, mkdtempSync, openSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
+import { chmodSync, closeSync, constants, copyFileSync, mkdirSync, mkdtempSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium, type Locator, type Page } from "playwright-core";
@@ -1428,8 +1428,30 @@ try {
   // address, refuses another client, a lapsed or revoked address and a moved file, and every
   // descriptor closes once the viewer lets go (server/file-view.ts)
   const clip = join(root, "media", "clip.webm");
-  const encode = Bun.spawn(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=24", "-vf", "noise=alls=60:allf=t", "-t", "8", "-c:v", "libvpx", "-deadline", "realtime", "-cpu-used", "8", "-b:v", "12M", "-minrate", "12M", "-maxrate", "12M", "-bufsize", "12M", "-an", clip], { stdout: "ignore", stderr: "pipe" });
-  assert.equal(await encode.exited, 0, await new Response(encode.stderr).text());
+  // an 8 s seed grown past what a page may embed by a Void element (EBML 0xEC, which players skip)
+  // closing its segment: no encoder on the machine, and the clip still plays and seeks as before
+  const seed = readFileSync(join(import.meta.dir, "fixtures", "page-media-seed.webm"));
+  const vint = (at: number) => {
+    const length = Math.clz32(seed[at]!) - 23;
+    let value = seed[at]! & (0xff >> length);
+    for (let index = 1; index < length; index += 1) value = value * 256 + seed[at + index]!;
+    return { length, value };
+  };
+  const header = vint(4);
+  const segment = 4 + header.length + header.value;
+  assert.equal(seed.readUInt32BE(segment), 0x18538067, "the seed's segment follows its EBML header");
+  const segmentSize = vint(segment + 4);
+  assert.equal(segmentSize.length, 8, "the seed's segment size is an 8-byte vint");
+  assert.equal(segment + 12 + segmentSize.value, seed.length, "the seed's segment runs to its end");
+  const padding = Buffer.alloc(9 + 9 * 1024 * 1024);
+  padding[0] = 0xec;
+  padding[1] = 0x01;
+  padding.writeUIntBE(padding.length - 9, 3, 6);
+  const grown = Buffer.concat([seed, padding]);
+  grown[segment + 4] = 0x01;
+  grown[segment + 5] = 0;
+  grown.writeUIntBE(segmentSize.value + padding.length, segment + 6, 6);
+  writeFileSync(clip, grown);
   assert.ok(statSync(clip).size > 8 * 1024 * 1024, "the recording is too large to put into the page");
   const live = new Set<number>();
   let openedCount = 0;
