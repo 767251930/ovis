@@ -1453,6 +1453,8 @@ try {
     for (const theme of ["light", "dark"] as const) {
       const tag = `${width}-${theme}`;
       const shoot = async (target: Page, state = "") => {
+        // a sheet opened for this state rises over --dur-sheet: capture it where it comes to rest
+        if (evidence) await sheetsSettled(target);
         if (evidence) await target.screenshot({ path: join(evidence, `pinned-page-media-${tag}${state ? `-${state}` : ""}.png`) });
       };
       const context = await browser.newContext(mobile
@@ -1531,6 +1533,12 @@ try {
         const sideways = await view.evaluate(() => document.scrollingElement!.scrollWidth - document.scrollingElement!.clientWidth);
         assert.equal(sideways, 0, `no horizontal scroll at ${tag}`);
         await frame.locator("#end").scrollIntoViewIfNeeded();
+        // the sandboxed page scrolls and paints in a process of its own: two of its frames painted
+        // since the scroll, with the end inside its viewport, so the shot shows the end
+        assert.equal(await frame.locator("#end").evaluate((end) => new Promise<boolean>((done) => requestAnimationFrame(() => requestAnimationFrame(() => {
+          const box = end.getBoundingClientRect();
+          done(box.top >= 0 && box.bottom <= window.innerHeight);
+        })))), true, `the page's end is in view at ${tag}`);
         await shoot(view, "scroll-end");
         await frame.locator("h1").scrollIntoViewIfNeeded();
         // the viewer's own controls: sizes, a hovered one, one reached by the keyboard, one held down
@@ -1635,7 +1643,7 @@ try {
         await view.reload();
         await view.locator(".conn-live").waitFor();
         await open();
-        await shootIn("reloaded", /^frame ready$/, () => sheetsSettled(view));
+        await shootIn("reloaded", /^frame ready$/);
         const second = await video.getAttribute("src") ?? "";
         assert.notEqual(second, first, "a new render gives a new address");
         record.reloadedAddressDiffers = second !== first;
