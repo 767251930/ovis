@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { appendFileSync, chmodSync, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, truncateSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, truncateSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 
@@ -676,6 +676,24 @@ describe("page files read through the descriptor that was validated", () => {
     expect(pageMediaResponse(token!, null)).toBeNull();
   });
 
+  it("refuses a file written over after its authorization, before minting an address or answering HEAD", async () => {
+    const { sub, page } = layout();
+    const clip = join(sub, "clip.mp4");
+    let changes = 0;
+    const change = (requested: string) => { if (requested === clip) { changes += 1; appendFileSync(clip, "more"); } };
+    pageFileHooks.afterAuthorize = change;
+    expect(drawn(await render(page)).tokens).toEqual([]);
+    expect(changes).toBeGreaterThan(0);
+    const minted = changes;
+    delete pageFileHooks.afterAuthorize;
+    const [token] = drawn(await render(page)).tokens;
+    expect(token).toBeDefined();
+    pageFileHooks.afterAuthorize = change;
+    expect(pageMediaResponse(token!, null, new Request("http://x/", { method: "HEAD" }))).toBeNull();
+    expect(changes).toBe(minted + 1);
+    expect(live.size).toBe(0);
+  });
+
   it("ends a stream once its file is written over in place", async () => {
     const { sub, page } = layout();
     const clip = join(sub, "clip.mp4");
@@ -702,13 +720,31 @@ describe("page files read through the descriptor that was validated", () => {
   });
 
   describe("over HTTP", () => {
-    const serve = async () => {
+    /** With `cancelled`, the body passes through a stream that calls it once the server has cancelled the page's body. */
+    const serve = async (cancelled?: () => void) => {
       const { sub, page } = layout();
       const bytes = Buffer.alloc(BIG);
       for (let index = 0; index < BIG; index += 1) bytes[index] = index % 251;
       writeFileSync(join(sub, "clip.mp4"), bytes);
       const [token] = drawn(await render(page, owner("phone"))).tokens;
-      const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: (request) => pageMediaResponse(token!, null, request) ?? new Response(null, { status: 404 }) });
+      const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: (request) => {
+        const response = pageMediaResponse(token!, null, request);
+        if (response === null) return new Response(null, { status: 404 });
+        if (cancelled === undefined || response.body === null) return response;
+        const inner = response.body.getReader();
+        return new Response(new ReadableStream<Uint8Array>({
+          async pull(controller) {
+            const next = await inner.read();
+            if (next.done) controller.close();
+            else controller.enqueue(next.value);
+          },
+          async cancel(reason) {
+            const done = inner.cancel(reason);
+            cancelled();
+            await done;
+          },
+        }, { highWaterMark: 0 }), { status: response.status, headers: response.headers });
+      } });
       const opened: number[] = [];
       const track = pageFileHooks.opened!;
       pageFileHooks.opened = (fd) => { track(fd); opened.push(fd); };
@@ -760,18 +796,45 @@ describe("page files read through the descriptor that was validated", () => {
       } finally { stop(); }
     });
 
-    it("closes once when the client goes away mid-stream", async () => {
-      const { opened, url, stop } = await serve();
+    it("closes once when the client goes away during a read, after that read returns", async () => {
+      let cancelled!: () => void;
+      const gone = new Promise<void>((done) => { cancelled = done; });
+      const { opened, url, stop } = await serve(() => cancelled());
+      // every read past the first waits until it is let go, so the client leaves while one is under way
+      let entered!: () => void;
+      const reading = new Promise<void>((done) => { entered = done; });
+      let release!: () => void;
+      const gate = new Promise<void>((done) => { release = done; });
+      let reads = 0;
+      pageFileHooks.read = async (fd, buffer, position) => {
+        reads += 1;
+        if (reads > 1) {
+          entered();
+          await gate;
+        }
+        return readSync(fd, buffer, 0, buffer.length, position);
+      };
       try {
         const controller = new AbortController();
         const response = await fetch(url, { signal: controller.signal });
         const reader = response.body!.getReader();
         expect((await reader.read()).done).toBe(false);
-        const closed = closing(opened.at(-1)!);
+        await reading;
+        const fd = opened.at(-1)!;
         controller.abort();
+        await gone;
+        // cancelled with a read under way: its descriptor stays open until that read returns
+        expect(live.has(fd)).toBe(true);
+        expect(fstatSync(fd).isFile()).toBe(true);
+        const closed = closing(fd);
+        release();
         await closed;
         expect(live.size).toBe(0);
-      } finally { stop(); }
+        expect(closedTwice).toEqual([]);
+      } finally {
+        release();
+        stop();
+      }
     });
 
     it("plays nothing, and opens nothing, once its device is revoked", async () => {

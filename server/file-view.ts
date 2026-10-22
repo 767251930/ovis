@@ -496,6 +496,10 @@ function openAuthorized(requested: string, roots: readonly string[]): Authorized
     if (named.dev !== opened.dev || named.ino !== opened.ino) return null;
     if (!openedWithin(fd, again, root, roots)) return null;
     hooks.afterAuthorize?.(requested);
+    // what is handed out (an address's size, a HEAD's length) is the file as it is once authorized:
+    // one written over in place since it was first looked at is refused, not described by that look
+    const settled = (hooks.fstat ?? fstatBig)(fd);
+    if (settled.dev !== opened.dev || settled.ino !== opened.ino || settled.size !== opened.size || settled.mtimeNs !== opened.mtimeNs) return null;
     kept = true;
     return { fd, requested, file: again, roots, mime: mimeOf(again), dev: opened.dev, ino: opened.ino, size: Number(opened.size), mtimeNs: opened.mtimeNs };
   } catch {

@@ -2,7 +2,7 @@
 import "./test-herdr.ts";
 import assert from "node:assert/strict";
 import { Database } from "bun:sqlite";
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, constants, copyFileSync, mkdirSync, mkdtempSync, openSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium, type Locator, type Page } from "playwright-core";
@@ -24,6 +24,17 @@ import { sheetsSettled } from "./sheets-settled.ts";
 import { runMoreItem } from "./header-more.ts";
 import type { Machine } from "../shared/protocol.ts";
 import { chromePath } from "./chrome-path.ts";
+
+/** Let the stand-in Codex go: it is reading its FIFO, so a writer finds it (ENXIO: it never started or already left). */
+function releaseStandIn(): void {
+  let fd: number;
+  try { fd = openSync(standInRelease, constants.O_WRONLY | constants.O_NONBLOCK); } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENXIO") console.error("the stand-in Codex could not be let go:", error);
+    return;
+  }
+  writeSync(fd, "\n");
+  closeSync(fd);
+}
 
 const openFiles = async (page: import("playwright-core").Page) => {
   const headerButton = page.locator(".header-files-button");
@@ -74,7 +85,11 @@ db.exec("CREATE TABLE threads (id TEXT, rollout_path TEXT, cwd TEXT, archived IN
 db.query("INSERT INTO threads VALUES (?, ?, ?, 0, NULL, 1, 1, 'cli', ?)").run(thread, transcript, root, "Show me the demo video.");
 db.close();
 const standIn = join(root, "codex");
-writeFileSync(standIn, "#!/bin/sh\nsleep 600\n");
+// the stand-in Codex runs until this run lets it go (`releaseStandIn`), not for a time: it waits on a FIFO only this run writes to
+const standInRelease = join(root, "codex-release");
+const fifo = Bun.spawn(["mkfifo", standInRelease], { stdout: "pipe", stderr: "pipe" });
+assert.equal(await fifo.exited, 0, await new Response(fifo.stderr).text());
+writeFileSync(standIn, `#!/bin/sh\nread line < '${standInRelease}'\n`);
 chmodSync(standIn, 0o755);
 copyFileSync(join(import.meta.dir, "fixtures", "file-preview.webm"), join(root, "preview.webm"));
 writeFileSync(join(root, "notes.txt"), "File preview history regression\n");
@@ -1659,6 +1674,7 @@ try {
 } finally {
   await browser?.close();
   server?.stop();
+  releaseStandIn();
   if (otherWorkspace) await workspaceClose(otherWorkspace);
   if (workspace) await workspaceClose(workspace);
   rmSync(root, { recursive: true, force: true });
