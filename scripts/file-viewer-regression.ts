@@ -1635,7 +1635,7 @@ try {
         await view.reload();
         await view.locator(".conn-live").waitFor();
         await open();
-        await shootIn("reloaded", /^frame ready$/);
+        await shootIn("reloaded", /^frame ready$/, () => sheetsSettled(view));
         const second = await video.getAttribute("src") ?? "";
         assert.notEqual(second, first, "a new render gives a new address");
         record.reloadedAddressDiffers = second !== first;
