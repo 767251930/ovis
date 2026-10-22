@@ -198,6 +198,14 @@ it("the demo refuses draft clearing, drains accepted pending IDs once, and never
     assert.equal(framed(553, "hello framing", "framing-accepted").ok, true);
     assert.equal(framed(554, "hello framing\r", "framing-accepted").code, "invalid_submit_text", "a cached receipt must not bypass framing validation");
     assert.equal(await framedTurns(), 2);
+    // regression: a resend is the same message when its normalized text matches, as at the bridge
+    const equivalent = (id: number, text: string) => {
+      combinationPeer.socket.send(JSON.stringify({ type: "submit", id, pane_id: claude, text, payload: "hello\rworld", resend_id: "canonical-id" }));
+      return combinationPeer.frames.findLast((frame) => frame.type === "submit-result" && frame.id === id);
+    };
+    assert.equal(equivalent(555, "hello\r\nworld\n").ok, true);
+    assert.equal(equivalent(556, "hello\nworld").ok, true, "a canonically equal resend must replay its receipt");
+    assert.equal((await json("/api/pane/conversation?pane_id=" + claude)).turns.filter((turn: any) => turn.parts.some((part: any) => part.text === "hello\nworld")).length, 1);
   } finally {
     for (const socket of opened) socket.close();
     for (const [key, descriptor] of saved) {

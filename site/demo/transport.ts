@@ -1550,7 +1550,8 @@ class DemoSocket extends EventTarget {
           const resendKey = message.resend_id === undefined ? null : JSON.stringify([message.pane_id, message.resend_id, message.resend_generation ?? 0]);
           const previous = resendKey === null || badFraming ? undefined : heldCopyResends.get(resendKey);
           if (previous && this.mode !== "observe" && message.clear_draft === undefined) {
-            this.push(previous.text === message.text ? { ...previous.reply, id: message.id }
+            // the bridge keys a resend on its normalized text, so a CRLF copy of the same message replays
+            this.push(previous.text === text ? { ...previous.reply, id: message.id }
               : { type: "submit-result", id: message.id, pane_id: message.pane_id, ok: false, code: "invalid_submit_id", message: "This resend id already belongs to another message." });
             break;
           }
@@ -1573,7 +1574,7 @@ class DemoSocket extends EventTarget {
             const framingRefused = badFraming && code === "invalid_submit_text";
             const reply: Extract<ServerMessage, { type: "submit-result" }> = { type: "submit-result", id: message.id, pane_id: message.pane_id, ok: false, code,
               message: framingRefused ? `A message must be at most ${framingLimit} characters, without terminal control characters or paste markers, and sent as the composer shapes it; nothing was typed` : "The demo agent cannot take this submission." };
-            if (resendKey !== null && this.mode !== "observe" && code !== "pending_limit" && !framingRefused && !previous) heldCopyResends.set(resendKey, { text: message.text, reply, at: Date.now() });
+            if (resendKey !== null && this.mode !== "observe" && code !== "pending_limit" && !framingRefused && !previous) heldCopyResends.set(resendKey, { text, reply, at: Date.now() });
             this.completeRequest(reply);
             break;
           }
@@ -1587,7 +1588,7 @@ class DemoSocket extends EventTarget {
           } else {
             submitToChat(message.pane_id, text);
             const reply: Extract<ServerMessage, { type: "submit-result" }> = { type: "submit-result", id: message.id, pane_id: message.pane_id, ok: true };
-            if (resendKey !== null) heldCopyResends.set(resendKey, { text: message.text, reply, at: Date.now() });
+            if (resendKey !== null) heldCopyResends.set(resendKey, { text, reply, at: Date.now() });
             this.completeRequest(reply);
           }
         }
