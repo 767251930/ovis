@@ -1335,11 +1335,14 @@ try {
   const output = page.locator(".chat-tool-output pre").last();
   assert.equal(await output.innerText(), `${shotPath} (1600, 1000) -> (1255, 960)\nsaved shots/report.html\ndisplay image 1: [image/png]`, "the output reads as it was written");
   assert.equal(await output.getByRole("button", { name: "image/png" }).count(), 0, "a MIME type is not a file");
+  // the long list's sheet drops in an inert host of its own until it has slid out (src/lib/sheets.ts)
+  await page.waitForFunction(() => document.body.querySelector(":scope > div[inert][aria-hidden='true']") === null);
   if (process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "tool-output-links.png") });
   await output.getByRole("button", { name: shotPath, exact: true }).tap();
   const shot = page.getByRole("dialog", { name: "t00000.png", exact: true });
   await shot.locator("img.file-viewer-media").waitFor();
   assert.equal(await shot.locator("img.file-viewer-media").evaluate((image: HTMLImageElement) => image.naturalWidth), 1);
+  await sheetsSettled(page);
   if (process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "tool-output-image-open.png") });
   await shot.getByRole("button", { name: "Close file", exact: true }).click();
   await shot.waitFor({ state: "hidden" });
@@ -1357,6 +1360,7 @@ try {
   assert.equal(await report.getByRole("button", { name: "Show source", exact: true }).count(), 0, "HTML uses only Page | Source");
   assert.equal(await report.getByRole("button", { name: "Page", exact: true }).getAttribute("aria-pressed"), "true");
   assert.equal(await report.getByRole("link", { name: "Open in a new tab", includeHidden: true }).getAttribute("href").then((href) => href?.includes("render=1")), true, "the page opens as the page");
+  await sheetsSettled(page);
   if (process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "tool-output-html-page.png") });
   await report.getByRole("button", { name: "Source", exact: true }).click();
   await report.locator(".file-viewer-text[data-line-numbers] .hl-line").first().waitFor();
