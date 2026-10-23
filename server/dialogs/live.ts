@@ -94,6 +94,8 @@ export function promptTailIsActive(prompt: ParsedPrompt, screen: string): boolea
   // the last one, never for a hint that ended above later output (an answered, stale menu).
   const ends = (re: RegExp): boolean => [1, 2, 3].some((span) =>
     re.test(shown.slice(-span).join(" ")) && (span === 1 || !re.test(shown.slice(-span, -1).join(" "))));
+  // The rpiv reader validates its complete frame and Pi footer itself, including clipped hints.
+  if (prompt.responder === "pi-ask-question" || prompt.responder === "pi-ask-submit") return true;
   if (prompt.responder === "omp-question") return ends(OMP_SINGLE_HINT_RE) || ends(OMP_CLIPPED_SINGLE_HINT_RE) || ends(OMP_SINGLE_CLIPPED_HINT_RE) || ends(OMP_MULTI_HINT_RE)
     || ends(OMP_MULTI_CLIPPED_HINT_RE);
   if (prompt.responder === "omp-submit") return ends(OMP_REVIEW_HINT_RE);

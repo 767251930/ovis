@@ -525,7 +525,7 @@ function contentId(prompt: InteractivePrompt | null): string | undefined {
   return prompt ? parsedByPublicPrompt.get(prompt)?.id : undefined;
 }
 
-/** When each pane's omo form was last answered from the chat (see readPrompt). */
+/** When each pane's OmO/rpiv custom form was last answered from the chat (see readPrompt). */
 const formsAnswered = new Map<string, number>();
 const FORM_SETTLE_MS = 3_000;
 
@@ -577,8 +577,9 @@ async function readPrompt(paneId: string, codexHome?: string, openCodeStateDir?:
   const turns = answerTurns.get(paneId) ?? 0;
   const known = await readKnownPrompt(paneId, pane, agent, codexHome, panes, openCodeStateDir, openCodeState, signal);
   if (known.stale) return { agent, status, prompt: null, pane, panes, snapshot, stale: true };
-  // an omo form just answered has closed, while herdr still reports the wait for a moment: that
-  // is no screen to answer, and its fallback card would flash up after the form's last answer
+  // A custom form just answered can close before Herdr stops reporting blocked. Its hint may
+  // outlive the widget, but that is no input to offer as fallback keys. Known next steps still
+  // show immediately; only an unrecognized screen waits for this bounded settling window.
   const settling = Date.now() - (formsAnswered.get(paneId) ?? 0) < FORM_SETTLE_MS;
   if (known.prompt !== null || status !== "blocked" || !agent || settling) {
     fallbackLogged.delete(paneId);
@@ -1337,7 +1338,8 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
         await closeQueue(body.pane_id, contentId(target)!);
       }
       const responder = parsedByPublicPrompt.get(target)?.responder;
-      if (responder === "omo-question" || responder === "omo-review" || responder === "omo-typing" || responder === "omo-pending") {
+      if (responder === "omo-question" || responder === "omo-review" || responder === "omo-typing" || responder === "omo-pending"
+        || responder === "pi-ask-question" || responder === "pi-ask-submit") {
         formsAnswered.set(body.pane_id, Date.now());
         if (formsAnswered.size > 64) formsAnswered.delete(formsAnswered.keys().next().value!);
       }

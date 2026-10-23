@@ -31,6 +31,8 @@ const snapshot: Record<string, readonly [DialogReader["reread"], DialogReader["l
   "omo-pending": ["none", "none"],
   "pi-model": ["before-commit", "none"],
   "pi-thinking": ["before-commit", "none"],
+  "pi-ask-question": ["before-commit", "none"],
+  "pi-ask-submit": ["before-commit", "none"],
   "pi-question": ["none", "none"],
   "pi-confirm": ["none", "none"],
   "pi-input": ["none", "none"],
