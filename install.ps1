@@ -67,7 +67,25 @@ function Find-Plugin([string]$Id = $pluginId) {
     (Run-Tool herdr @('plugin', 'list', '--json') | ConvertFrom-Json).result.plugins |
         Where-Object { $_.plugin_id -eq $Id } | Select-Object -First 1
 }
-$legacy = Find-Plugin $legacyId
+# The ref to install is settled before anything moves: a release from before the rename still names
+# the plugin by its old id, and installing it cannot move an install to the new one
+if (-not (Find-Plugin)) {
+    if (-not $Ref) {
+        $Ref = Run-Tool git @('ls-remote', '--tags', '--refs', 'https://github.com/devswha/ovis.git', 'v*') |
+            ForEach-Object { if ($_ -match 'refs/tags/(v\d+\.\d+\.\d+)$') { $Matches[1] } } |
+            Sort-Object { [version]$_.Substring(1) } | Select-Object -Last 1
+    }
+    if (-not $Ref) { throw 'Could not find the latest app release on GitHub. Check your connection and run this again.' }
+    # the id the manifest at $Ref names; when it cannot be read, the current id is assumed
+    $refId = try {
+        $manifest = (Invoke-WebRequest -UseBasicParsing -TimeoutSec 10 "https://raw.githubusercontent.com/devswha/ovis/$Ref/herdr-plugin.toml").Content
+        if ($manifest -match '(?m)^id\s*=\s*"([^"]+)"') { $Matches[1] }
+    } catch { $null }
+    # that release (0.4.13 and older) installs, runs and updates under the old id: the move waits for
+    # a release that names the new one
+    if ($refId -eq $legacyId) { $pluginId = $legacyId }
+}
+$legacy = if ($pluginId -ne $legacyId) { Find-Plugin $legacyId } else { $null }
 if ($legacy) {
     Write-Host "Ovis: moving the installed plugin to its Ovis id; its settings and token come along"
     # stopped first: under both ids, each would start a server on herdr's next start
@@ -79,7 +97,7 @@ if ($legacy) {
 function Test-WindowsPlugin($Plugin) {
     $Plugin.plugin_root -and (Test-Path -LiteralPath (Join-Path $Plugin.plugin_root 'scripts\plugin.ps1'))
 }
-$plugin = Find-Plugin
+$plugin = Find-Plugin $pluginId
 $newInstall = $false
 if ($plugin -and -not (Test-WindowsPlugin $plugin)) {
     # A copy from a release older than Windows support never starts here, so no in-app update reaches it.
@@ -88,16 +106,10 @@ if ($plugin -and -not (Test-WindowsPlugin $plugin)) {
     $plugin = $null
 }
 if (-not $plugin) {
-    if (-not $Ref) {
-        $Ref = Run-Tool git @('ls-remote', '--tags', '--refs', 'https://github.com/devswha/ovis.git', 'v*') |
-            ForEach-Object { if ($_ -match 'refs/tags/(v\d+\.\d+\.\d+)$') { $Matches[1] } } |
-            Sort-Object { [version]$_.Substring(1) } | Select-Object -Last 1
-    }
-    if (-not $Ref) { throw 'Could not find the latest app release on GitHub. Check your connection and run this again.' }
     Write-Host "Ovis: installing the plugin at $Ref"
     Run-Tool herdr @('plugin', 'install', 'devswha/ovis', '--ref', $Ref, '--yes')
     $newInstall = $true
-    $plugin = Find-Plugin
+    $plugin = Find-Plugin $pluginId
     if (-not $plugin.plugin_root) { throw 'herdr does not list the plugin after installing it. See: herdr plugin list' }
     # herdr installs a release without Windows build steps as a success that cannot start.
     if (-not (Test-WindowsPlugin $plugin)) { throw "Ovis $Ref does not support Windows yet. Run this again after the next release." }
