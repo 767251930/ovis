@@ -1,6 +1,6 @@
 import { expect, spyOn, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { appendFileSync, mkdtempSync, rmSync } from "node:fs";
 import { createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,10 +8,14 @@ import type { InteractivePrompt } from "../../shared/protocol.ts";
 import { handlePromptRequest, promptWaitEnded } from "../prompt.ts";
 import { socketAddress } from "../herdr/client.ts";
 import fixtures from "../fixtures/pi-ask-2.13.9.json";
+import navigation from "../fixtures/pi-ask-navigation.json";
+import system from "../fixtures/pi-ask-system-theme.json";
+import { ANSI_RE, type OmoAsk } from "./shared.ts";
 
 // A fake RPC endpoint on a unique pipe/socket. Never connects to a real Herdr session.
 async function withPane(initial: string, run: (pane: {
-  screen: string; status: string; sent: string[]; onSent?: (key: string) => void;
+  screen: string; status: string; sent: string[]; visible?: string; scroll: number; onSent?: (key: string) => void;
+  bind(questions: OmoAsk["questions"]): void;
   card(): Promise<InteractivePrompt>; read(): Promise<InteractivePrompt | null>;
   answer(id: string, choice: object, signal?: AbortSignal): Promise<number>;
 }) => Promise<void>) {
@@ -19,6 +23,8 @@ async function withPane(initial: string, run: (pane: {
   const endpoint = socketAddress(join(root, "herdr.sock"));
   const id = `pi-ask-${randomUUID()}`;
   const sockets = new Set<Socket>();
+  const session = join(root, "session.jsonl");
+  let nativeCall = 0;
   const readCard = async (): Promise<InteractivePrompt | null> => {
     const url = new URL(`http://127.0.0.1/api/pane/prompt?pane_id=${id}`);
     const response = (await handlePromptRequest(new Request(url), url))!;
@@ -26,8 +32,12 @@ async function withPane(initial: string, run: (pane: {
     return (await response.json() as { prompt: InteractivePrompt | null }).prompt;
   };
   const pane = {
-    screen: initial, status: "blocked", sent: [] as string[], onSent: undefined as ((key: string) => void) | undefined,
+    screen: initial, status: "blocked", sent: [] as string[], visible: undefined as string | undefined, scroll: 0, onSent: undefined as ((key: string) => void) | undefined,
     read: readCard,
+    bind: (questions: OmoAsk["questions"]) => {
+      if (nativeCall) appendFileSync(session, JSON.stringify({ type: "message", message: { role: "toolResult", toolCallId: `native-${nativeCall}` } }) + "\n");
+      appendFileSync(session, JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: `native-${++nativeCall}`, name: "ask_user_question", arguments: { questions } }] } }) + "\n");
+    },
     card: async () => {
       const prompt = await readCard();
       expect(prompt).not.toBeNull();
@@ -49,12 +59,13 @@ async function withPane(initial: string, run: (pane: {
     socket.on("data", chunk => {
       buffer += chunk.toString();
       if (!buffer.includes("\n")) return;
-      const request = JSON.parse(buffer.split("\n")[0]!) as { id: string; method: string; params: { keys?: string[]; text?: string } };
+      const request = JSON.parse(buffer.split("\n")[0]!) as { id: string; method: string; params: { keys?: string[]; text?: string; format?: string } };
       const reply = (result: unknown) => socket.end(JSON.stringify({ id: request.id, result }) + "\n");
       if (request.method === "session.snapshot") return reply({ snapshot: { panes: [{ pane_id: id, agent: "pi", agent_status: pane.status, terminal_id: id, focused: false }], layouts: [] } });
-      if (request.method === "pane.read") return reply({ read: { text: pane.screen } });
+      if (request.method === "pane.read") return reply({ read: { text: request.params.format === "ansi" ? pane.visible ?? pane.screen : pane.screen.replace(ANSI_RE, "") } });
+      if (request.method === "pane.get") return reply({ pane: { pane_id: id, scroll: { offset_from_bottom: pane.scroll } } });
       if (request.method === "pane.process_info") return reply({ process_info: { foreground_processes: [] } });
-      if (request.method === "agent.get") return reply({ agent: {} });
+      if (request.method === "agent.get") return reply({ agent: nativeCall ? { agent: "pi", agent_session: { agent: "pi", source: "herdr:pi", kind: "path", value: session } } : {} });
       if (request.method === "pane.send_keys" || request.method === "pane.send_text") {
         for (const key of request.params.keys ?? [`text:${request.params.text}`]) {
           pane.sent.push(key);
@@ -67,11 +78,15 @@ async function withPane(initial: string, run: (pane: {
   });
   await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(endpoint, resolve); });
   const previous = process.env["HERDR_SOCKET"];
+  const previousStore = process.env["PI_CODING_AGENT_SESSION_DIR"];
+  process.env["PI_CODING_AGENT_SESSION_DIR"] = root;
   process.env["HERDR_SOCKET"] = endpoint;
   try { await run(pane); } finally {
     promptWaitEnded(id);
     if (previous === undefined) delete process.env["HERDR_SOCKET"];
     else process.env["HERDR_SOCKET"] = previous;
+    if (previousStore === undefined) delete process.env["PI_CODING_AGENT_SESSION_DIR"];
+    else process.env["PI_CODING_AGENT_SESSION_DIR"] = previousStore;
     for (const socket of sockets) socket.destroy();
     await new Promise<void>(resolve => server.close(() => resolve()));
     rmSync(root, { recursive: true, force: true });
@@ -158,6 +173,142 @@ test("Pi ask answer route keeps the final review explicit and observes its Cance
     expect(await pane.answer(card.id, { option_index: 1 })).toBe(200);
     expect(pane.sent).toEqual(["down", "enter"]);
   });
+});
+
+test("Pi ask answer route goes back without sending Enter and permits answering the returned question", async () => {
+  await withPane(navigation.second, async pane => {
+    const card = await pane.card();
+    expect(card.can_step_back).toBe(true);
+    pane.onSent = key => { if (key === "left") pane.screen = navigation["first-after-one"]; };
+    expect(await pane.answer(card.id, { step_back: true, draft: { option_indices: [], custom_text: "" } })).toBe(200);
+    expect(pane.sent).toEqual(["left"]);
+    const returned = await pane.card();
+    expect(returned.title).toBe("单元格内容");
+    expect(returned.steps?.[0]?.current).toBe(true);
+    expect(await pane.answer(card.id, { step_back: true })).toBe(409);
+    pane.onSent = key => { if (key === "enter") pane.screen = navigation.second; };
+    expect(await pane.answer(returned.id, { option_index: 0 })).toBe(200);
+  });
+});
+
+test("Pi ask answer route switches to unanswered tabs and returns from review", async () => {
+  await withPane(navigation.first, async pane => {
+    let card = await pane.card();
+    pane.onSent = key => { if (key === "right") pane.screen = navigation["second-unanswered"]; };
+    expect(await pane.answer(card.id, { step_index: 1 })).toBe(200);
+    expect(pane.sent).toEqual(["right"]);
+    expect((await pane.card()).title).toBe("输出类型");
+    pane.screen = navigation.review;
+    card = await pane.card();
+    let moves = 0;
+    pane.onSent = key => { if (key === "left") pane.screen = ++moves === 1 ? navigation["second-answered"] : navigation["first-answered"]; };
+    expect(await pane.answer(card.id, { step_index: 0 })).toBe(200);
+    expect(pane.sent).toEqual(["right", "left", "left"]);
+    expect((await pane.card()).title).toBe("单元格内容");
+  });
+});
+
+test("Pi ask does not mistake a scrolled or mismatched viewport for the live selected tab", async () => {
+  await withPane(navigation.second, async pane => {
+    const card = await pane.card();
+    pane.scroll = 20;
+    expect((await pane.card()).can_step_back).not.toBe(true);
+    expect(await pane.answer(card.id, { step_back: true })).toBe(409);
+    pane.scroll = 0;
+    pane.visible = navigation["first-after-one"];
+    expect((await pane.card()).can_step_back).not.toBe(true);
+    expect(pane.sent).toEqual([]);
+  });
+});
+
+test("system-theme review returns to the clicked first question, not the second, including incomplete forms", async () => {
+  const state = (name: string) => system.states.find(item => item.name === name)!.screen;
+  await withPane(state("review-incomplete"), async pane => {
+    pane.bind(system.questions.map(q => ({ ...q, multiSelect: q.multiSelect ?? false })));
+    let index = 3;
+    pane.onSent = key => {
+      expect(key).toBe("left");
+      pane.screen = state(["partial-first", "partial-second", "partial-third"][--index]!);
+    };
+    const card = await pane.card();
+    expect(card.fallback).not.toBe(true);
+    expect(card.options.map(option => option.label)).toEqual(["Cancel"]);
+    expect(await pane.answer(card.id, { step_index: 0, draft: { option_indices: [], custom_text: "" } })).toBe(200);
+    expect(pane.sent).toEqual(["left", "left", "left"]);
+    expect((await pane.card()).title).toBe("返回修改");
+    expect((await pane.card()).multi_select).toBe(false);
+  });
+});
+
+test("incomplete review cancellation sends Escape, never the native partial-submit Enter", async () => {
+  const screen = system.states.find(item => item.name === "review-incomplete")!.screen;
+  await withPane(screen, async pane => {
+    const card = await pane.card();
+    pane.onSent = key => { if (key === "esc") { pane.screen = "Question complete"; pane.status = "working"; } };
+    expect(await pane.answer(card.id, { option_index: 0 })).toBe(200);
+    expect(pane.sent).toEqual(["esc"]);
+    expect(await pane.read()).toBeNull();
+  });
+});
+
+const nativeQuestions: OmoAsk["questions"] = [
+  { header: "单元格内容", question: "结果表是否允许结构化单元格？", multiSelect: false, options: [
+    { label: "允许结构化单元格", description: "单元格可包含列表或对象。" }, { label: "只允许普通单值", description: "仅数字、文字和布尔值。" },
+  ] },
+  { header: "输出类型", question: "结果使用哪种类型？", multiSelect: false, options: [
+    { label: "允许结构化单元格", description: "单元格可包含列表或对象。" }, { label: "只允许普通单值", description: "仅数字、文字和布尔值。" },
+  ] },
+];
+
+test("Pi's verified pending call restores saved custom answers and single choices when returning", async () => {
+  await withPane(navigation["custom-returned"], async pane => {
+    pane.bind(nativeQuestions);
+    const card = await pane.card();
+    expect(card.default_custom_text).toBe("existing draft");
+    pane.onSent = key => { if (key === "left") pane.screen = navigation["first-answered"]; };
+    expect(await pane.answer(card.id, { step_back: true, draft: { option_indices: [], custom_text: "existing draft" } })).toBe(200);
+    const first = await pane.card();
+    expect(first.default_option_index).toBe(0);
+    expect(first.options[0]!.label).toBe("允许结构化单元格");
+    pane.onSent = key => { if (key === "right") pane.screen = navigation["custom-returned"]; };
+    expect(await pane.answer(first.id, { step_index: 1, draft: { option_indices: [0], custom_text: "" } })).toBe(200);
+    expect((await pane.card()).default_custom_text).toBe("existing draft");
+    expect(pane.sent).toEqual(["left", "right"]);
+  });
+});
+
+test("Pi navigation rejects another invocation even with identical question labels and content", async () => {
+  await withPane(navigation.second, async pane => {
+    pane.bind(nativeQuestions);
+    const card = await pane.card();
+    pane.bind(nativeQuestions);
+    expect(await pane.answer(card.id, { step_back: true })).toBe(409);
+    expect(pane.sent).toEqual([]);
+  });
+});
+
+test("Pi ask navigation refuses mixed actions, invalid steps and unsent drafts before any keys", async () => {
+  await withPane(navigation.second, async pane => {
+    const card = await pane.card();
+    for (const choice of [{ step_index: -1 }, { step_index: 1 }, { step_index: 2 }, { step_index: 0.5 },
+      { step_index: 0, step_back: true }, { step_back: true, option_index: 0 },
+      { step_back: true, draft: { option_indices: [], custom_text: "unsent" } },
+      { step_back: true, draft: { option_indices: [0], custom_text: "" } }]) {
+      expect(await pane.answer(card.id, choice)).toBe(400);
+    }
+    expect(pane.sent).toEqual([]);
+  });
+});
+
+test("Pi ask navigation stops after a wrong tab, closed widget or changed form instead of overshooting", async () => {
+  for (const changed of [navigation["first-answered"], "Working...", navigation["second-answered"].replaceAll("输出类型", "Other form")]) {
+    await withPane(navigation.review, async pane => {
+      const card = await pane.card();
+      pane.onSent = key => { if (key === "left") pane.screen = changed; };
+      expect(await pane.answer(card.id, { step_index: 0 })).toBe(409);
+      expect(pane.sent).toEqual(["left"]);
+    });
+  }
 });
 
 const closingScreen = "Question complete\nEnter to select · ↑/↓ to navigate · Esc to cancel";

@@ -126,7 +126,8 @@ describe("Pi rpiv ask questionnaires", () => {
     expect(second.question).toBe("结果使用哪种类型？");
     const review = read("review")!;
     expect(review).not.toBeNull();
-    expect(review.body).toContain("允许结构化单元格");
+    expect(review.body).toBeNull();
+    expect(review.answers?.[0]?.answer).toBe("允许结构化单元格");
     expect(review.options.map(option => option.label)).toEqual(["Submit answers", "Cancel"]);
     expect(answerKeys(review, { option_index: 0 })).toEqual([{ keys: ["enter"] }]);
     expect(answerKeys(review, { option_index: 1 })).toEqual([{ keys: ["down"] }, { keys: ["enter"] }]);
