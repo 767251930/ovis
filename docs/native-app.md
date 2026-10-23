@@ -2,7 +2,8 @@
 
 Status: Phase 1 step 2 built for iOS (checked in a simulator) and Android (checked in an emulator),
 2026-10-19. To run them, see [The app (app/)](#the-app-app) and
-[The Android app](#the-android-app).
+[The Android app](#the-android-app). Step 3, the push relay, is built in
+[`push-relay/`](../push-relay/README.md) with its tests, 2026-10-23, and not deployed yet.
 
 Ovis ships as a store app for iOS first, Android later. The goal is reach: the app is
 found in the App Store and installs in one tap, where the web app needs "Add to Home Screen". It
@@ -57,9 +58,11 @@ choices) and changes little:
 6. APNs telling the relay a token is gone becomes a 410 to the PC, which already deletes a gone
    subscription.
 
-The relay's code lives in this repo next to `telemetry/`, open so anyone can run their own, and
-keeps no logs, like the telemetry Worker. Its APNs key is a secret of the project's Cloudflare
-account. Android (FCM) gets a second route in the same Worker later.
+The relay's code lives in this repo next to `telemetry/`, in
+[`push-relay/`](../push-relay/README.md), open so anyone can run their own, and keeps no logs,
+like the telemetry Worker. It answers at `push.ovis.sh`. Its APNs key is a secret of the
+project's Cloudflare account (`APNS_KEY`). Android (FCM) gets a second route in the same Worker
+later.
 
 ## Phase 1: first store release
 
@@ -69,7 +72,9 @@ account. Android (FCM) gets a second route in the same Worker later.
 2. `app/`: Capacitor project, connect screen, QR scan, demo mode. Built 2026-10-19, see
    [The app (app/)](#the-app-app). QR scanning still needs a physical iPhone (the simulator
    has no camera).
-3. Relay Worker with tests (VAPID pinning, rate limit, gone tokens).
+3. Relay Worker with tests (VAPID pinning, rate limit, gone tokens). Built 2026-10-23 in
+   [`push-relay/`](../push-relay/README.md), at `push.ovis.sh`; deploying it needs the D1
+   database and the APNs secrets its README lists.
 4. `src/lib/push.ts`: subscribe through the native bridge inside the app.
 5. Notification Service Extension that decrypts.
 6. App Store listing, privacy answers, review notes pointing at the demo mode.
@@ -321,6 +326,7 @@ Still open on Android:
   Transport Security exception that review must accept. `https` through `tailscale serve` needs
   none.
 - Several PCs: the app should list them, as the remote PCs feature does in the browser.
-- Not decided: the relay's domain. The app is Ovis, with the ID `sh.ovis.app`.
+- The relay's domain is `push.ovis.sh` (decided 2026-10-23). The app is Ovis, with the ID
+  `sh.ovis.app`.
 - The macbook is shared with other sessions (a ChatGPT CUA was running on 2026-10-18): check it
   is free before booting a simulator there.
