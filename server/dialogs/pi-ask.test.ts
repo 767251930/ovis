@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { answerKeys, parseInteractivePrompt } from "../prompt.ts";
-import fixtures from "./fixtures/pi-ask-2.13.9.json";
+import fixtures from "../fixtures/pi-ask-2.13.9.json";
 
 // Actual rpiv-ask-user-question 2.13.9 rendering in a fake Pi TUI, with fictional questions.
 // No model, terminal, or Herdr session is started. Cursor APC sequences are removed as in pane.read.
@@ -12,12 +12,24 @@ const labels = ["允许结构化单元格", "只允许普通单值"];
 describe("Pi rpiv ask questionnaires", () => {
   test("reads a real inline pane whose Pi footer follows the hint without another rule", () => {
     // Captured from a synthetic question; paths, model and usage are fictionalized.
-    const screen = readFileSync(new URL("./fixtures/pi-ask-inline-pane.txt", import.meta.url), "utf8");
+    const screen = readFileSync(new URL("../fixtures/pi-ask-inline-pane.txt", import.meta.url), "utf8");
     const prompt = parseInteractivePrompt("pi", screen);
     expect(prompt).not.toBeNull();
     expect(prompt?.options.map(option => option.label)).toEqual(["看到中文选项", "仍只有按键"]);
     expect(parseInteractivePrompt("pi", screen + "another program's output")).toBeNull();
   });
+  test("accepts an inline footer with thinking disabled", () => {
+    const screen = readFileSync(new URL("../fixtures/pi-ask-thinking-off-pane.txt", import.meta.url), "utf8");
+    const prompt = parseInteractivePrompt("pi", screen);
+    expect(prompt).not.toBeNull();
+    expect(prompt?.options.map(option => option.label)).toEqual(["看到中文选项", "仍只有按键"]);
+    expect(prompt?.fallback).toBeUndefined();
+  });
+
+  test.each(["some-model • thinking off", "a-working-model • medium", "working-model • medium"])("treats model footer text as data: %s", model => {
+    expect(parseInteractivePrompt("pi", fixtures.single + footer.replace("some-model • medium", model))?.id).toBe(read("single")!.id);
+  });
+
   test("shows actual answers and descriptions instead of fallback keyboard controls", () => {
     const prompt = read("single")!;
     expect(prompt).not.toBeNull();
@@ -28,6 +40,28 @@ describe("Pi rpiv ask questionnaires", () => {
     expect(prompt.options[0]!.description).toBe("单元格可包含列表或对象。");
     expect(prompt.custom_option_index).toBe(2);
     expect(answerKeys(prompt, { option_index: 1 })).toEqual([{ keys: ["down"] }, { keys: ["enter"] }]);
+  });
+
+  test.each(["single", "tabs-first", "multi"] as const)("keeps the complete multi-paragraph question in %s", name => {
+    const question = "问题第一段？\n\n 第二段说明。\n 这是第二段的换行。\n\n 第三段说明。";
+    const screen = fixtures[name].replace("结果表是否允许结构化单元格？", question) + footer;
+    const prompt = parseInteractivePrompt("pi", screen);
+    expect(prompt).not.toBeNull();
+    expect(prompt?.question).toBe("问题第一段？ 第二段说明。 这是第二段的换行。 第三段说明。");
+    expect(prompt?.title).toBe(name === "tabs-first" ? "" : "单元格内容");
+    expect(prompt?.options.map(option => option.label)).toEqual(labels);
+    const changed = parseInteractivePrompt("pi", screen.replace("第三段说明。", "另一段说明。"));
+    expect(changed).not.toBeNull();
+    expect(changed?.id).not.toBe(prompt?.id);
+  });
+
+  test("does not mistake a headerless question's first paragraph for a badge", () => {
+    const screen = fixtures.single.replace(/^ {2}单元格内容[^\S\r\n]*\r?\n/m, "")
+      .replace("结果表是否允许结构化单元格？", "问题第一段？\n\n 第二段说明。") + footer;
+    const prompt = parseInteractivePrompt("pi", screen);
+    expect(prompt).not.toBeNull();
+    expect(prompt?.title).toBe("");
+    expect(prompt?.question).toBe("问题第一段？ 第二段说明。");
   });
 
   test("uses the actual cursor and keeps identity stable during navigation", () => {
@@ -50,6 +84,17 @@ describe("Pi rpiv ask questionnaires", () => {
     expect(answerKeys(read("single-custom-draft")!, { custom_text: "replacement" })).toEqual([
       { keys: ["ctrl+u"] }, { text: "replacement" }, { keys: ["enter"] },
     ]);
+  });
+
+  test("rejects every C0/DEL/C1 control in a typed answer before producing any input steps", () => {
+    const prompt = read("single")!;
+    const controls = [...Array.from({ length: 32 }, (_, code) => code), ...Array.from({ length: 33 }, (_, code) => code + 127)];
+    for (const code of controls) {
+      for (const text of [`first${String.fromCharCode(code)}second`, `${String.fromCharCode(code)}answer`, `answer${String.fromCharCode(code)}`]) {
+        expect(() => answerKeys(prompt, { custom_text: text })).toThrow("control characters");
+      }
+    }
+    expect(answerKeys(prompt, { custom_text: "中文 café 🙂" })).toContainEqual({ text: "中文 café 🙂" });
   });
 
   test("toggles multiple choices with Space and submits only on its separate Submit row", () => {

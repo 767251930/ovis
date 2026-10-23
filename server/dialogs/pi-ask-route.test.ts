@@ -7,7 +7,7 @@ import { join } from "node:path";
 import type { InteractivePrompt } from "../../shared/protocol.ts";
 import { handlePromptRequest, promptWaitEnded } from "../prompt.ts";
 import { socketAddress } from "../herdr/client.ts";
-import fixtures from "./fixtures/pi-ask-2.13.9.json";
+import fixtures from "../fixtures/pi-ask-2.13.9.json";
 
 // A fake RPC endpoint on a unique pipe/socket. Never connects to a real Herdr session.
 async function withPane(initial: string, run: (pane: {
@@ -51,7 +51,7 @@ async function withPane(initial: string, run: (pane: {
       if (!buffer.includes("\n")) return;
       const request = JSON.parse(buffer.split("\n")[0]!) as { id: string; method: string; params: { keys?: string[]; text?: string } };
       const reply = (result: unknown) => socket.end(JSON.stringify({ id: request.id, result }) + "\n");
-      if (request.method === "session.snapshot") return reply({ snapshot: { panes: [{ pane_id: id, agent: "pi", agent_status: pane.status, terminal_id: id }], layouts: [] } });
+      if (request.method === "session.snapshot") return reply({ snapshot: { panes: [{ pane_id: id, agent: "pi", agent_status: pane.status, terminal_id: id, focused: false }], layouts: [] } });
       if (request.method === "pane.read") return reply({ read: { text: pane.screen } });
       if (request.method === "pane.process_info") return reply({ process_info: { foreground_processes: [] } });
       if (request.method === "agent.get") return reply({ agent: {} });
@@ -91,6 +91,21 @@ test("Pi ask answer route confirms the real second choice after observing its cu
   });
 });
 
+test("Pi ask answer route handles an unfocused pane with paragraphs and thinking off", async () => {
+  const screen = (name: "single" | "single-second") => fixtures[name]
+    .replace("结果表是否允许结构化单元格？", "第一段问题？\n\n 第二段说明。\n\n 第三段说明。")
+    + "\nC:\\project\n12.0%/200k (auto)    some-model • thinking off\n";
+  await withPane(screen("single"), async pane => {
+    const card = await pane.card();
+    expect(card.fallback).not.toBe(true);
+    expect(card.question).toBe("第一段问题？ 第二段说明。 第三段说明。");
+    expect(card.options.map(option => option.label)).toEqual(["允许结构化单元格", "只允许普通单值"]);
+    pane.onSent = key => { if (key === "down") pane.screen = screen("single-second"); };
+    expect(await pane.answer(card.id, { option_index: 1 })).toBe(200);
+    expect(pane.sent).toEqual(["down", "enter"]);
+  });
+});
+
 test("Pi ask answer route refuses a question replaced during navigation", async () => {
   await withPane(fixtures.single, async pane => {
     const card = await pane.card();
@@ -107,6 +122,24 @@ test("Pi ask answer route writes a custom answer only after focusing the inline 
     pane.onSent = key => { if (key === "down") pane.screen = ++moves === 1 ? fixtures["single-second"] : fixtures["single-custom-empty"]; };
     expect(await pane.answer(card.id, { custom_text: "typed answer" })).toBe(200);
     expect(pane.sent).toEqual(["down", "down", "ctrl+u", "text:typed answer", "enter"]);
+  });
+});
+
+test.each(["first\nsecond", "first\rsecond", "first\r\nsecond", "\nanswer", "answer\n", "first\tsecond", "first\u001bsecond", "first\u0085second"])("Pi ask answer route rejects unsafe typed input without sending even navigation %#", async text => {
+  await withPane(fixtures.single, async pane => {
+    const card = await pane.card();
+    const original = pane.screen;
+    let moves = 0;
+    // Allow the real custom-input focus path: rejection must be validation, not a stale cursor.
+    // Any premature Enter would close the question and expose a later screen to the remaining input.
+    pane.onSent = key => {
+      if (key === "down") pane.screen = ++moves === 1 ? fixtures["single-second"] : fixtures["single-custom-empty"];
+      else if (key.includes("\n") || key.includes("\r") || key === "enter") pane.screen = fixtures.review;
+    };
+    expect(await pane.answer(card.id, { custom_text: text })).toBe(400);
+    expect(pane.sent).toEqual([]);
+    expect(pane.screen).toBe(original);
+    expect((await pane.card()).id).toBe(card.id);
   });
 });
 

@@ -25,7 +25,7 @@ function frame(screen: string): Frame | null {
     if (footer.length !== 2
       || !/^(?:[A-Za-z]:[\\/]|[~\/])/.test(footer[0] ?? "")
       || !/\d+(?:\.\d+)?%\/\d/.test(footer[1] ?? "")
-      || /^[❯›>]|thinking|working/i.test(footer[1]!)) return null;
+      || /^[❯›>]/.test(footer[1]!)) return null;
   }
   const bottom = findLastIndex(lines.slice(0, hintIndex), line => RULE_RE.test(line));
   const top = findLastIndex(lines.slice(0, bottom), line => RULE_RE.test(line));
@@ -75,10 +75,15 @@ function question(frame: Frame): ParsedPrompt | null {
   if (multi && (other.checked || (typing && other.label.trim()))) return null;
   const heading = lines.slice(top + 1, first);
   const tabBar = heading.filter(line => /^\s*←.*✓ Submit\s*→$/.test(line)).map(line => line.trim()).join(" ");
-  const groups = heading.filter(line => !/^\s*←.*✓ Submit\s*→$/.test(line)).join("\n").trim().split(/\n\s*\n/).filter(Boolean);
-  if (!groups.length || groups.length > 2 || (tabBar && groups.length !== 1)) return null;
-  const title = groups.length === 2 ? normalizeText(groups[0]!) : "";
-  const text = normalizeText(groups.at(-1)!);
+  const content = heading.filter(line => !/^\s*←.*✓ Submit\s*→$/.test(line));
+  const start = content.findIndex(line => line.trim());
+  if (start < 0) return null;
+  // The optional single-question badge has its own leading space inside Text's padding.
+  // Blank lines within the following question are paragraphs, not extra widget headings.
+  const badge = !tabBar && /^ {2}\S/.test(content[start]!) && !content[start + 1]?.trim();
+  const title = badge ? normalizeText(content[start]!) : "";
+  const text = normalizeText(content.slice(start + Number(badge)).join("\n"));
+  if (!text) return null;
   const options = rows.slice(0, -1).map(row => ({ label: row.label, description: row.description.length ? normalizeText(row.description.join(" ")) : null }));
   const selectedIndex = next?.selected ? rows.length : rows.findIndex(row => row.selected);
   const checked = rows.slice(0, -1).flatMap((row, index) => row.checked ? [index] : []);

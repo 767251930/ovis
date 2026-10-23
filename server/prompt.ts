@@ -374,6 +374,11 @@ export function answerKeys(prompt: InteractivePrompt, answer: Pick<PromptAnswer,
 
   if (answer.custom_text !== undefined) {
     if (typeof answer.custom_text !== "string") throw new InvalidAnswer("Custom text must be a string.");
+    // A raw newline/control in rpiv's inline input can submit it and type into the next
+    // question, review, or composer. Validate before trimming and before any navigation.
+    if (parsed.responder === "pi-ask-question" && /[\u0000-\u001f\u007f-\u009f]/.test(answer.custom_text)) {
+      throw new InvalidAnswer("Pi custom answers must be one line without control characters.");
+    }
     const text = answer.custom_text.trim();
     if (!text || parsed.customMenuIndex === null || (parsed.multi_select && parsed.responder !== "claude-question")) throw new InvalidAnswer("This prompt does not accept a custom answer.");
     if (parsed.responder === "fallback-gjc-menu") {
