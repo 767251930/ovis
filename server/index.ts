@@ -168,6 +168,8 @@ export function createServer(
     submitDelayMs?: number;
     /** How long a queued send waits for a confirmed new turn to start; tests shorten it. */
     pendingStartTimeoutMs?: number;
+    /** Active Pi transcript receipts allowed per connection. Tests lower it to exercise the pre-send boundary. */
+    piReceiptLimit?: number;
     /** how long a push alert waits for the pane to change first (server/push.ts); tests send at once */
     alertTiming?: Partial<AlertTiming>;
     /** accept plain-http loopback push endpoints (server/push.ts); only tests delivering to push.fake.ts set it */

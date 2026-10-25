@@ -2258,10 +2258,20 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
   discards it. Actions keep a `--touch-target` touch target on phones.
   Sending disables that item's actions; errors stay inline. Uncertain messages offer Copy and
   Discard saved copy, with no retry action. Desktop and phones share this flow.
-- Accepted pending messages clear only the draft prefix acknowledged by the bridge. Actual
-  Enter delivery removes the pending row and refreshes the transcript. Next-turn delivery and
-  an explicit Send now action claim the same server ID; connection loss never resumes automatic input.
-  Previously held browser messages retain their explicit Send now/Discard recovery.
+- Accepted pending messages clear only the draft prefix acknowledged by the bridge. For agents
+  other than Pi, actual Enter delivery removes the pending row and refreshes the transcript. For
+  a message submitted from Ovis Chat to Pi, Enter changes it to a read-only **Sent to Pi ·
+  waiting for transcript** user bubble. Only a matching durable user record appended beyond the byte
+  boundary captured on that exact Pi session's unchanged active-branch prefix removes it. Pi may
+  stage input while status says idle/done during automatic compaction, so status and screen text are
+  not delivery evidence. The live receipt and its text belong only to the connection that sent it;
+  another attached typist neither sees nor acts on it. A lost connection or server restart keeps the
+  browser's saved, non-resendable **transcript confirmation unavailable** copy, but automatic
+  consumption cannot resume without that exact server-owned connection. A changed terminal or
+  session also makes confirmation unavailable. Ovis does not claim that Pi queued or consumed
+  the message until the transcript proves it. Next-turn delivery and an explicit Send
+  now action claim the same server ID. Connection loss never resumes automatic input. Previously
+  held browser messages retain their explicit Send now/Discard recovery.
 - Not connected, the one word `Reconnecting…` (`Connecting…` before this page's first connection to
   the PC's socket) is the placeholder while the box is empty and moves into the status content once
   there is a draft (`composerStatusHint`), on a phone too; it says no more (nothing is queued, and

@@ -1,5 +1,5 @@
 import { readFileSync, realpathSync } from "node:fs";
-import { isAbsolute, join, resolve } from "node:path";
+import { basename, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { agentGet, paneProcessInfo } from "./herdr/client.ts";
@@ -18,6 +18,17 @@ export { transcriptInStore as piTranscriptInStore, unwrittenSession } from "./tr
  */
 export const defaultPiSessionDir = (): string =>
   process.env["PI_CODING_AGENT_SESSION_DIR"] || join(piAgentDir(), "sessions");
+
+/**
+ * The session an agent named but has not written, or null. pi and omp write their file only
+ * once the first answer is in (pi's SessionManager waits for an assistant message), so until
+ * then the reported path does not exist. Only an absent `.jsonl` file whose nearest existing
+ * ancestor is a directory inside the store, both resolved, counts: nothing is read from it,
+ * its display id and canonical prospective path keep equally named sessions distinct.
+ */
+export function piUnwrittenHeaderId(path: string): string | null {
+  return /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/iu.exec(basename(path))?.[1] ?? null;
+}
 
 const PI_EXECUTABLE = /(^|[\\/])pi(?:\.exe|\.[cm]?js)?$/i;
 const PI_NPM_ENTRY = /(^|[\\/])node_modules[\\/]@earendil-works[\\/]pi-coding-agent[\\/]dist[\\/]bundle[\\/]cli\.js$/i;
