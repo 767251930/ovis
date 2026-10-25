@@ -134,6 +134,8 @@ export type ParsedPrompt = InteractivePrompt & {
   };
   /** Pi's active tab, from colors verified against the live detection screen by the caller. */
   piAskForm?: { identity: string; index: number };
+  /** Pi's custom row owns the inline editor, rather than only a selected menu row. */
+  piAskTyping?: true;
   menuLabels: string[];
   selectedIndex: number;
   checkedOptionIndices: number[];

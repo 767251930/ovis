@@ -140,6 +140,19 @@ test("Pi ask answer route writes a custom answer only after focusing the inline 
   });
 });
 
+test.each(["ctrl+u", "text:typed answer"])("Pi ask stops when its custom editor disappears after %s", async dismissAfter => {
+  await withPane(fixtures.single, async pane => {
+    const card = await pane.card();
+    let moves = 0;
+    pane.onSent = key => {
+      if (key === "down") pane.screen = ++moves === 1 ? fixtures["single-second"] : fixtures["single-custom-empty"];
+      if (key === dismissAfter) pane.screen = fixtures.single;
+    };
+    expect(await pane.answer(card.id, { custom_text: "typed answer" })).toBe(409);
+    expect(pane.sent).toEqual(["down", "down", "ctrl+u", ...(dismissAfter.startsWith("text:") ? [dismissAfter] : [])]);
+  });
+});
+
 test.each(["first\nsecond", "first\rsecond", "first\r\nsecond", "\nanswer", "answer\n", "first\tsecond", "first\u001bsecond", "first\u0085second"])("Pi ask answer route rejects unsafe typed input without sending even navigation %#", async text => {
   await withPane(fixtures.single, async pane => {
     const card = await pane.card();
@@ -228,7 +241,16 @@ test("Pi ask refuses an answer when the bottom viewport shows an older question"
     pane.screen = navigation.second;
     expect(await pane.answer(card.id, { option_index: 0 })).toBe(409);
     expect(pane.sent).toEqual([]);
-    expect((await pane.card()).question).toBe("结果使用哪种类型？");
+    const refreshed = await pane.card();
+    expect(refreshed.question).toBe("结果使用哪种类型？");
+    for (const choice of [{ option_index: 0 }, { custom_text: "must not be sent" }, { step_back: true }, { step_index: 0 }]) {
+      expect(await pane.answer(refreshed.id, choice)).toBe(409);
+    }
+    expect(pane.sent).toEqual([]);
+    pane.visible = navigation.second;
+    const verified = await pane.card();
+    expect(await pane.answer(verified.id, { option_index: 0 })).toBe(200);
+    expect(pane.sent).toEqual(["enter"]);
   });
 });
 

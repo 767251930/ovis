@@ -121,6 +121,7 @@ function question(frame: Frame, expected?: OmoAsk): ParsedPrompt | null {
       can_step_back: navigable && tabs.index! > 0 } : {}),
   }, {
     ...(navigable ? { piAskForm: { identity: `${expected?.id ?? ""}\0${tabs!.identity}`, index: tabs!.index! } } : {}),
+    ...(typing ? { piAskTyping: true as const } : {}),
     responder: "pi-ask-question", menuLabels: [...options.map(option => option.label), OTHER, ...(next ? [next.label] : [])],
     selectedIndex, checkedOptionIndices: checked, customMenuIndex: multi ? null : custom, rejectWithEscapeIndex: null,
     ...(!multi ? { customSteps: (text: string): AnswerStep[] => [

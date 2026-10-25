@@ -566,7 +566,7 @@ async function restoredOnLiveScreen(paneId: string, viewport: string): Promise<s
   return viewportShowsLive(scrollBefore, scrollAfter, colors, before, live) ? claudeRestoredDraft(live, colors, sent) : null;
 }
 
-async function readPrompt(paneId: string, codexHome?: string, openCodeStateDir?: string, openCodeState = defaultOpenCodeState, signal?: AbortSignal): Promise<{ agent: string; status: string; prompt: InteractivePrompt | null; pane: HerdrPane; panes: HerdrPane[]; snapshot: SessionSnapshot; screen?: string; stale?: boolean }> {
+async function readPrompt(paneId: string, codexHome?: string, openCodeStateDir?: string, openCodeState = defaultOpenCodeState, signal?: AbortSignal): Promise<{ agent: string; status: string; prompt: InteractivePrompt | null; pane: HerdrPane; panes: HerdrPane[]; snapshot: SessionSnapshot; screen?: string; stale?: boolean; inputUnverified?: true }> {
   const before = openCodeState.checkpoint();
   const snapshot = await openCodeState.snapshot();
   const { panes } = snapshot;
@@ -592,7 +592,7 @@ async function readPrompt(paneId: string, codexHome?: string, openCodeStateDir?:
   const settling = Date.now() - (formsAnswered.get(paneId) ?? 0) < FORM_SETTLE_MS;
   if (known.prompt !== null || status !== "blocked" || !agent || settling) {
     fallbackLogged.delete(paneId);
-    return { agent, status, prompt: asked(paneId, known.prompt, turns), pane, panes, snapshot, screen: known.screen };
+    return { agent, status, prompt: asked(paneId, known.prompt, turns), pane, panes, snapshot, screen: known.screen, inputUnverified: known.inputUnverified };
   }
   // herdr says the agent waits on the user and no reader knows the screen: the fallback card
   const screen = known.screen ?? await liveScreen(paneId);
@@ -608,7 +608,7 @@ async function readPrompt(paneId: string, codexHome?: string, openCodeStateDir?:
     fallbackLogged.add(paneId);
     console.warn(`prompt: ${agent} pane ${paneId} is blocked on a screen no reader knows; fallback card (${prompt.options.length} options)`);
   }
-  return { agent, status, prompt, pane, panes, snapshot, screen };
+  return { agent, status, prompt, pane, panes, snapshot, screen, inputUnverified: known.inputUnverified };
 }
 
 const piAskReader = new OmoAskReader(); // Pi and OmO share the message/toolCall JSONL envelope.
@@ -621,7 +621,7 @@ async function readKnownPrompt(
   openCodeStateDir?: string,
   openCodeState = defaultOpenCodeState,
   signal?: AbortSignal,
-): Promise<{ prompt: InteractivePrompt | null; screen?: string; stale?: boolean }> {
+): Promise<{ prompt: InteractivePrompt | null; screen?: string; stale?: boolean; inputUnverified?: true }> {
   // no native card (no session herdr reports, no verified v2 service, no pending form): OpenCode
   // v1's own question prompt is read off the screen below (dialogs/opencode.ts, #1386)
   native: if (agent === "opencode") {
@@ -769,6 +769,7 @@ async function readKnownPrompt(
   if (!["claude", "omp", "codex", "omo", "pi", "gjc", "hermes", "cmd", "opencode", ""].includes(agent)) return { prompt: null };
   let screen = await liveScreen(paneId);
   const piTabs = agent === "pi" && /^\s*←.*✓ Submit\s*→$/m.test(screen) && /Enter to select · ↑\/↓ to navigate/.test(screen);
+  let inputUnverified: true | undefined;
   if (piTabs) {
     // Detection text has no styles. Background or neutral-vs-dim/green text identifies
     // the active tab, not answered boxes: verify the viewport before authorizing moves.
@@ -782,6 +783,7 @@ async function readKnownPrompt(
       .split(/\r?\n/).map(line => line.trimEnd()).join("\n").trimEnd();
     if (colors !== null && viewportShowsLive(scrollBefore, scrollAfter, colors, before, screen)
       && text(colors) === text(screen)) screen = colors;
+    else inputUnverified = true; // Plain-text labels remain readable, but authorize no input.
   }
   // omo's form reads its text from the session's call, the screen showing where the form stands
   const omoAsks = ["omo", "pi", "claude", ""].includes(agent) && pane.cwd && OMO_FORM_RE.test(screen)
@@ -814,7 +816,7 @@ async function readKnownPrompt(
     if (parsedByPublicPrompt.get(fallback)?.responder === "fallback-gjc-menu") return { prompt: fallback, screen };
   }
   const count = agent === "codex" && prompt === null ? queuedQuestionCount(screen) : 0;
-  if (count === 0 || !pane.cwd) return { prompt, screen };
+  if (count === 0 || !pane.cwd) return { prompt, screen, inputUnverified };
   let rollout = queueRollouts.get(paneId);
   if (!rollout || Date.now() - rollout.at > QUEUE_ROLLOUT_MS) {
     rollout = { path: await codexTranscriptPath(paneId, pane.cwd, await paneCodexHome(paneId, codexHome)), at: Date.now() };
@@ -1006,9 +1008,9 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
       const deadlineAt = Date.now() + 4_000;
       const deadline = AbortSignal.any([request.signal, AbortSignal.timeout(4_000)]);
       const openCodeState = options.openCodeState ?? defaultOpenCodeState;
-      const { prompt, agent, pane, panes } = await readPrompt(body.pane_id, options.codexHome, options.openCodeStateDir, openCodeState, deadline);
+      const { prompt, agent, pane, panes, inputUnverified } = await readPrompt(body.pane_id, options.codexHome, options.openCodeStateDir, openCodeState, deadline);
       // a plan card's id carries its plan file's revision: the file as it is now must match too
-      if (!prompt || (await withPlanFile(prompt, options.claudeTranscript?.(body.pane_id)))!.id !== body.prompt_id) return promptChanged();
+      if (inputUnverified || !prompt || (await withPlanFile(prompt, options.claudeTranscript?.(body.pane_id)))!.id !== body.prompt_id) return promptChanged();
       log.matched = true;
 
       const parsedPrompt = parsedByPublicPrompt.get(prompt);
@@ -1197,7 +1199,7 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
             read: async () => {
               if (!active()) return null;
               const live = await readPrompt(body.pane_id, options.codexHome, options.openCodeStateDir, openCodeState, deadline);
-              return live.agent === "pi" && live.status === "blocked" && live.prompt ? parsedByPublicPrompt.get(live.prompt) ?? null : null;
+              return !live.inputUnverified && live.agent === "pi" && live.status === "blocked" && live.prompt ? parsedByPublicPrompt.get(live.prompt) ?? null : null;
             },
           });
           if (!moved) return promptChanged();
@@ -1317,7 +1319,7 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
             const read = await Promise.race([reading, Bun.sleep(left).then(() => null)]);
             if (!read || Date.now() > deadline) return false;
             const shown = read.prompt ? parsedByPublicPrompt.get(read.prompt) ?? null : null;
-            if (asks() && aimed(shown, read.screen ?? "")) { looked(shown); matchedScreen = read.screen ?? ""; return true; }
+            if (!read.inputUnverified && asks() && aimed(shown, read.screen ?? "")) { looked(shown); matchedScreen = read.screen ?? ""; return true; }
             await Bun.sleep(50);
           }
         };
@@ -1337,6 +1339,14 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
         let customTyped = false;
         const customEditorReady = async (draft: string): Promise<boolean> => {
           const deadline = Date.now() + SETTLE_MS;
+          if (responder === "pi-ask-question") {
+            // Clear, text and submit each await an RPC: the editor may disappear between them.
+            const reading = readKnownPrompt(body.pane_id, pane, agent, options.codexHome, panes, options.openCodeStateDir);
+            const read = await Promise.race([reading, Bun.sleep(Math.max(0, deadline - Date.now())).then(() => null)]);
+            const shown = read?.prompt ? parsedByPublicPrompt.get(read.prompt) : null;
+            return !!read && !read.inputUnverified && asks() && !request.signal.aborted && Date.now() < deadline
+              && shown?.id === parsed.id && shown.piAskTyping === true && shown.selectedIndex === parsed.customMenuIndex;
+          }
           while (asks() && !request.signal.aborted && Date.now() < deadline) {
             const read = await Promise.race([
               paneRead({ paneId: body.pane_id, source: "detection" }),
@@ -1373,7 +1383,7 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
             const move = step.keys?.every((key) => key === KEY.up || key === KEY.down || (sideways && (key === KEY.left || key === KEY.right))) ?? false;
             // the asking ended under the answer: no further key, whatever the screen shows
             if (!asks()) return promptChanged();
-            if (responder === "fallback-gjc-menu" && body.custom_text !== undefined && committed) {
+            if ((responder === "fallback-gjc-menu" || responder === "pi-ask-question") && body.custom_text !== undefined && committed) {
               if (!(await customEditorReady(customTyped ? body.custom_text.trim() : ""))) return promptChanged();
               if (step.text !== undefined) customTyped = true;
             }
