@@ -111,7 +111,14 @@ function newerBundle(version: unknown): boolean {
  */
 const SSH_REFUSED = /Permission denied \(|Host key verification failed|IDENTIFICATION HAS CHANGED|Too many authentication failures/i;
 const newerBridge = (version: string): string => `This PC uses a newer bridge (v${version}); this app requires v${REMOTE_BUNDLE_VERSION}. Update this app, then reconnect. The remote bridge was left running.`;
-const INDEPENDENT_BRIDGE = "This socket uses an independently managed web server. Update it through its own Settings, then reconnect; it was left running.";
+/**
+ * An independently managed web server (Ovis run on that PC, not a bridge this app started) is never
+ * this app's to update. Whichever side is behind is the one to update: that server through its own
+ * Settings, or this app when that server is the newer one.
+ */
+const independentBridge = (version: string): string => newerBundle(version)
+  ? `This socket uses an independently managed web server of a newer version (v${version}); this app requires v${REMOTE_BUNDLE_VERSION}. Update this app in Settings → Updates, then reconnect; that server was left running.`
+  : "This socket uses an independently managed web server. Update it through its own Settings, then reconnect; it was left running.";
 
 /** A connection that retrying cannot fix: the PC waits for the user instead of reconnecting. */
 export class MachineActionRequired extends Error {
@@ -630,10 +637,10 @@ export class MachineManager {
       update = false;
     }
     // an independently managed web server is not this app's to update or to wait for: it keeps
-    // its own message below, whatever its version
+    // its own message below, which names the side that is behind
     if (descriptor && descriptor.managed_remote && newerBundle(descriptor.bundle_version)) throw new MachineActionRequired(newerBridge(descriptor.bundle_version), "bridge_conflict");
     if (descriptor && (update || descriptor.bridge_protocol !== BRIDGE_PROTOCOL || descriptor.bundle_version !== REMOTE_BUNDLE_VERSION)) {
-      if (!descriptor.managed_remote) throw new MachineActionRequired(INDEPENDENT_BRIDGE, "setup");
+      if (!descriptor.managed_remote) throw new MachineActionRequired(independentBridge(descriptor.bundle_version), "setup");
       if (!update) throw new MachineActionRequired("This PC runs a bridge from a different version. Update the bridge to reconnect; herdr sessions keep running.", "update_bridge");
     }
     const hasBundle = inspection.bundleReady;
@@ -731,7 +738,7 @@ export class MachineManager {
     if (!forReplacement && (identity.bridge_protocol !== BRIDGE_PROTOCOL || identity.bundle_version !== REMOTE_BUNDLE_VERSION)) {
       // what runs decides, not its descriptor: a server this app does not manage, or a newer
       // bridge, is not something an update from here can fix
-      if (identity.managed_remote === false) throw new MachineActionRequired(INDEPENDENT_BRIDGE, "setup");
+      if (identity.managed_remote === false) throw new MachineActionRequired(independentBridge(identity.bundle_version), "setup");
       if (newerBundle(identity.bundle_version)) throw new MachineActionRequired(newerBridge(identity.bundle_version), "bridge_conflict");
       throw new MachineActionRequired("This PC runs a bridge from a different version. Update the bridge to reconnect; herdr sessions keep running.", "update_bridge");
     }
