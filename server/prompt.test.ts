@@ -7,6 +7,8 @@ import type { InteractivePrompt } from "../shared/protocol.ts";
 
 import { answerKeys, hermesInputDraft, claudeClearableDraft, claudeInputBoxText, claudeInputDraft, claudeInputEmpty, viewportShowsLive, removedInvisible, noteSubmitted, codexQuestionsCollapsed, codexQueuedPrompt, handlePromptRequest, openOmoAsks, parseClaudeSuggestion, parseFallbackPrompt, parseInteractivePrompt, pendingOmoAsk, promptWaitEnded, claudeRestoredDraft, lastChatSubmitted } from "./prompt.ts";
 import { registry } from "./dialogs/registry.ts";
+import { gjcCustomEditorMatches } from "./dialogs/fallback.ts";
+import { parsedByPublicPrompt } from "./dialogs/shared.ts";
 
 const labels = (prompt: InteractivePrompt | null) => prompt?.options.map((option) => option.label);
 // Real omo-ai 5.1.30 pane.read captures at 120 and 45 columns, with the recorded open calls.
@@ -3920,6 +3922,8 @@ describe("an answer and the menu it was made for", () => {
     agentUnanswered?: boolean;
     /** what an ANSI read shows instead of `screen`: the pane's viewport, scrolled off its live screen */
     viewport?: string;
+    /** A text viewport scrolled away from detection's live drawing. */
+    visibleScreen?: string;
     /** the next screen read alone answers with this, that much later */
     nextRead?: { text: string; delay: number };
     /** herdr presses this key and its reply is lost on the way */
@@ -3945,7 +3949,7 @@ describe("an answer and the menu it was made for", () => {
       socket.on("data", (chunk) => {
         input += chunk.toString();
         if (!input.includes("\n")) return;
-        const request = JSON.parse(input.split("\n")[0]!) as { id: string; method: string; params: { keys?: string[]; text?: string; format?: string } };
+        const request = JSON.parse(input.split("\n")[0]!) as { id: string; method: string; params: { keys?: string[]; text?: string; format?: string; source?: string } };
         const answer = (result: unknown) => socket.end(`${JSON.stringify({ id: request.id, result })}\n`);
         const snapshotDelay = request.method === "session.snapshot" ? pane.nextSnapshotDelay : undefined;
         if (snapshotDelay !== undefined) pane.nextSnapshotDelay = undefined;
@@ -3955,7 +3959,7 @@ describe("an answer and the menu it was made for", () => {
           const once = pane.nextRead;
           pane.nextRead = undefined;
           if (once) return void setTimeout(() => answer({ read: { text: once.text } }), once.delay);
-          return void setTimeout(() => answer({ read: { text: request.params.format === "ansi" ? pane.viewport ?? pane.screen : pane.screen } }), pane.readDelay ?? 0);
+          return void setTimeout(() => answer({ read: { text: request.params.source === "visible" && pane.visibleScreen !== undefined ? pane.visibleScreen : request.params.format === "ansi" ? pane.viewport ?? pane.screen : pane.screen } }), pane.readDelay ?? 0);
         }
         if (request.method === "pane.process_info") return answer({ process_info: { foreground_processes: pane.omo?.live ? [{ pid: pane.omo.pid, argv: ["omo"] }] : [] } });
         if (request.method === "agent.get" && pane.agentUnanswered) return;
@@ -4316,6 +4320,143 @@ ${heldRule}
       pane.screen = draw(at) + (sent.startsWith("text:") ? `\n${sent.slice(5)}\n` : "");
     };
   }
+
+  const gjcCustomScreen = (at = 0, draft: string | null = null, question = "Which scope?") =>
+    `──────────────\n\n${question}\n\n──────────────\n${["Read only", "Other (type your own)", "Ask about these choices"].map((label, index) => `│${at === index ? "" : " "} ${label} │`).join("\n")}\n──────────────\n\n${draft === null ? "↑/↓ select enter esc PgUp/PgDn/Ctrl+u/d: question · Wheel: transcript" : `> ${draft}\n\nenter submit esc back to options ctrl+g external editor PgUp/PgDn: question · Wheel: transcript`}\n\n──────────────\n`;
+
+  test("matches a GJC editor below thousands of quoted body rows without losing its identity", () => {
+    const body = "> Quoted body details\n".repeat(4_000);
+    const question = `${body}Which scope?`;
+    const expected = parsedByPublicPrompt.get(parseFallbackPrompt("gjc", gjcCustomScreen(0, null, question)))!;
+    expect(expected.body).toHaveLength(12_000);
+    expect(gjcCustomEditorMatches(gjcCustomScreen(1, "", question), expected, "")).toBe(true);
+    expect(gjcCustomEditorMatches(gjcCustomScreen(1, "Original\n> draft", question), expected, "Original > draft")).toBe(true);
+    expect(gjcCustomEditorMatches(gjcCustomScreen(1, "Original \n draft", question), expected, "Original  draft")).toBe(true);
+    const wrapped = ["Original", ...Array<string>(32).fill("> draft")];
+    expect(gjcCustomEditorMatches(gjcCustomScreen(1, wrapped.join("\n"), question), expected, wrapped.join(" "))).toBe(true);
+    expect(gjcCustomEditorMatches(gjcCustomScreen(1, "Changed draft", question), expected, "Original draft")).toBe(false);
+    expect(gjcCustomEditorMatches(gjcCustomScreen(1, "", `${body}Changed details\nWhich scope?`), expected, "")).toBe(false);
+  });
+
+  test("sends a GJC Other answer only after its own inline editor opens and contains the pasted draft", async () => {
+    await withPane("gjc", "blocked", gjcCustomScreen(), async (pane) => {
+      let at = 0;
+      let opened = false;
+      pane.onSent = (sent) => {
+        if (sent === "down") at++;
+        if (sent === "enter") opened = true;
+        const draft = sent.startsWith("text:") ? sent.slice(5).replace("\u001b[200~", "").replace("\u001b[201~", "") : "";
+        pane.screen = gjcCustomScreen(at, opened ? draft : null);
+      };
+      const prompt = (await card())!;
+      expect(prompt.custom_option_index).toBe(1);
+      expect(await answer(prompt.id, { custom_text: "/scope 읽기 전용" })).toEqual({ status: 200, code: undefined });
+      expect(pane.sent).toEqual(["down", "enter", "text:\u001b[200~/scope 읽기 전용\u001b[201~", "enter"]);
+    });
+  });
+
+  test("does not type a GJC Other answer into a dismissed or replaced editor", async () => {
+    for (const next of ["Ready\n\n❯ ", gjcCustomScreen(1, "", "A different question?")]) {
+      await withPane("gjc", "blocked", gjcCustomScreen(), async (pane) => {
+        pane.onSent = (sent) => { pane.screen = sent === "down" ? gjcCustomScreen(1) : next; };
+        expect(await answer((await card())!.id, { custom_text: "Never send this to the composer" })).toEqual({ status: 409, code: "prompt_changed" });
+        expect(pane.sent).toEqual(["down", "enter"]);
+      });
+    }
+  });
+
+  test("does not submit a GJC custom draft after its editor closes or the draft changes", async () => {
+    // Soft wrapping can put the space between words at the row boundary. Changed content,
+    // doubled internal spaces, and incomplete drafts still must not be submitted.
+    for (const next of ["Ready\n\n❯ ", gjcCustomScreen(1, "Changed locally"), gjcCustomScreen(1, "Original\nchanged"), gjcCustomScreen(1, "Original  draft"), gjcCustomScreen(1, "Original")]) {
+      await withPane("gjc", "blocked", gjcCustomScreen(), async (pane) => {
+        pane.onSent = (sent) => {
+          if (sent === "down") pane.screen = gjcCustomScreen(1);
+          else if (sent === "enter") pane.screen = gjcCustomScreen(1, "");
+          else if (sent.startsWith("text:")) pane.screen = next;
+        };
+        expect(await answer((await card())!.id, { custom_text: "Original draft" })).toEqual({ status: 409, code: "prompt_changed" });
+        expect(pane.sent).toEqual(["down", "enter", "text:\u001b[200~Original draft\u001b[201~"]);
+      });
+    }
+  });
+
+  test.each([
+    ["Original draft", "Original\ndraft"],
+    ["Original draft", "Orig\ninal draft"],
+    ["Original > draft", "Original\n> draft"],
+    ["Original  draft", "Original \n draft"],
+  ])("submits soft-wrapped GJC draft %s from the live drawing while the viewport shows history", async (text, draft) => {
+    await withPane("gjc", "blocked", gjcCustomScreen(), async (pane) => {
+      pane.visibleScreen = "Earlier output\n\n❯ ";
+      pane.onSent = (sent) => {
+        if (sent === "down") pane.screen = gjcCustomScreen(1);
+        else if (sent === "enter") pane.screen = gjcCustomScreen(1, "");
+        else if (sent.startsWith("text:")) pane.screen = gjcCustomScreen(1, draft);
+      };
+      expect(await answer((await card())!.id, { custom_text: text })).toEqual({ status: 200, code: undefined });
+      expect(pane.sent).toEqual(["down", "enter", `text:\u001b[200~${text}\u001b[201~`, "enter"]);
+    });
+  });
+
+  test("rejects a GJC editor whose question body changes beyond the display cap", async () => {
+    const body = "Approval details ".repeat(800);
+    const draw = (at: number, draft: string | null, suffix: string) =>
+      gjcCustomScreen(at, draft, `${body}${suffix}\nWhich scope?`);
+    for (const changedAfterPaste of [false, true]) {
+      await withPane("gjc", "blocked", draw(0, null, "Original"), async (pane) => {
+        pane.onSent = (sent) => {
+          if (sent === "down") pane.screen = draw(1, null, "Original");
+          else if (sent === "enter") pane.screen = draw(1, "", changedAfterPaste ? "Original" : "Changed");
+          else if (sent.startsWith("text:")) pane.screen = draw(1, "My answer", "Changed");
+        };
+        const prompt = (await card())!;
+        expect(prompt.body).toHaveLength(12_000);
+        expect(await answer(prompt.id, { custom_text: "My answer" })).toEqual({ status: 409, code: "prompt_changed" });
+        expect(pane.sent).toEqual(changedAfterPaste
+          ? ["down", "enter", "text:\u001b[200~My answer\u001b[201~"]
+          : ["down", "enter"]);
+      });
+    }
+  });
+
+  test("never uses a historical GJC editor when the live drawing has closed", async () => {
+    await withPane("gjc", "blocked", gjcCustomScreen(), async (pane) => {
+      pane.onSent = (sent) => {
+        if (sent === "down") pane.screen = gjcCustomScreen(1);
+        else if (sent === "enter") {
+          pane.screen = "Ready\n\n❯ ";
+          pane.visibleScreen = gjcCustomScreen(1, "");
+        } else if (sent.startsWith("text:")) pane.visibleScreen = gjcCustomScreen(1, "Do not send");
+      };
+      expect(await answer((await card())!.id, { custom_text: "Do not send" })).toEqual({ status: 409, code: "prompt_changed" });
+      expect(pane.sent).toEqual(["down", "enter"]);
+    });
+  });
+
+  test("does not resume GJC text delivery after seeing its editor dismissed once", async () => {
+    await withPane("gjc", "blocked", gjcCustomScreen(), async (pane) => {
+      let editorReads = 0;
+      pane.onSent = (sent) => {
+        if (sent === "down") pane.screen = gjcCustomScreen(1);
+        if (sent === "enter") pane.onRead = () => {
+          editorReads++;
+          pane.screen = editorReads === 1 ? "Ready\n\n❯ " : gjcCustomScreen(1, "");
+        };
+      };
+      expect(await answer((await card())!.id, { custom_text: "Do not replay" })).toEqual({ status: 409, code: "prompt_changed" });
+      expect(pane.sent).toEqual(["down", "enter"]);
+      expect(editorReads).toBe(1);
+    });
+  });
+
+  test("recognizes numbered GJC Other before the clarification row and refuses control characters", () => {
+    const prompt = parseFallbackPrompt("gjc", gjcCustomScreen().replace("Other (type your own)", "2. Other (type your own)"));
+    expect(prompt.custom_option_index).toBe(1);
+    expect(() => answerKeys(prompt, { option_index: 1 })).toThrow();
+    expect(() => answerKeys(prompt, { custom_text: "bad\u001b[201~input" })).toThrow();
+    expect(() => answerKeys(prompt, { custom_text: "Use\nthe terminal" })).toThrow();
+  });
 
   test("shows a GJC startup selector even before the pane is reported blocked", async () => {
     await withPane("gjc", "idle", gjcSelector().replace("[↑↓ to navigate, Enter to select, Esc to cancel]", "up/down navigate  enter select  esc cancel"), async () => {

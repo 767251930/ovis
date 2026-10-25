@@ -18,7 +18,7 @@ import { liveScreen, parsePrompt, promptTailIsActive } from "./dialogs/live.ts";
 import { sameText } from "./dialogs/omo.ts";
 import { INVISIBLE_CHAR_RE } from "./dialogs/claude.ts";
 import { parsePiDialog } from "./dialogs/pi.ts";
-import { parseFallbackPrompt } from "./dialogs/fallback.ts";
+import { gjcCustomEditorMatches, parseFallbackPrompt } from "./dialogs/fallback.ts";
 import { SUGGESTION_READ_MS, claudeHeldIsGrey, claudeInputDraft, claudeRestoredDraft, parseClaudeSuggestion, viewportShowsLive } from "./claude-input.ts";
 import { OMO_FORM_RE, omoAsksFor } from "./omo-questions.ts";
 import { codexQueuedPrompt, queuedQuestionCount, type QueueFront } from "./codex-queue.ts";
@@ -359,6 +359,12 @@ export function answerKeys(prompt: InteractivePrompt, answer: Pick<PromptAnswer,
     if (typeof answer.custom_text !== "string") throw new InvalidAnswer("Custom text must be a string.");
     const text = answer.custom_text.trim();
     if (!text || parsed.customMenuIndex === null || (parsed.multi_select && parsed.responder !== "claude-question")) throw new InvalidAnswer("This prompt does not accept a custom answer.");
+    if (parsed.responder === "fallback-gjc-menu") {
+      if (/[\r\n]/.test(text)) throw new InvalidAnswer("Use the terminal for a multiline GJC custom answer.");
+      if (/[\u0000-\u0008\u000b-\u001f\u007f]/.test(text)) throw new InvalidAnswer("Custom text contains unsupported control characters.");
+      // GJC handles bracketed paste atomically without /, @ or # autocomplete, as in core/pending.ts.
+      return [...keySteps([...navigationKeys(parsed.customMenuIndex - parsed.selectedIndex), KEY.enter]), { text: `\u001b[200~${text}\u001b[201~` }, ...keySteps([KEY.enter])];
+    }
     if (parsed.customSteps) return parsed.customSteps(text);
     // Claude's multiple choice: typing into the row ticks it, and Enter on Submit, the row under
     // it, sends the choice (→ in the row would move the text's cursor; measured on 2.1.301)
@@ -1224,6 +1230,28 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
           }
           if (more) await Bun.sleep(30);
         };
+        let customTyped = false;
+        const customEditorReady = async (draft: string): Promise<boolean> => {
+          const deadline = Date.now() + SETTLE_MS;
+          while (asks() && !request.signal.aborted && Date.now() < deadline) {
+            const read = await Promise.race([
+              paneRead({ paneId: body.pane_id, source: "detection" }),
+              Bun.sleep(Math.max(0, deadline - Date.now())).then(() => null),
+            ]);
+            if (!read || !asks() || request.signal.aborted || Date.now() >= deadline) return false;
+            if (gjcCustomEditorMatches(read.text, parsed, draft)) return true;
+            // Retry only the known pre-transition drawing. A dismissed or different question
+            // permanently ends this delivery, even if an identical-looking one appears later.
+            if (customTyped) {
+              if (!gjcCustomEditorMatches(read.text, parsed, "")) return false;
+            } else {
+              const before = parsedByPublicPrompt.get(parseFallbackPrompt("gjc", read.text));
+              if (before?.id !== parsed.id || before.selectedIndex !== parsed.customMenuIndex) return false;
+            }
+            await Bun.sleep(50);
+          }
+          return false;
+        };
         if (interaction) {
           const result = await executeInteractionPlan(interaction, body.option_index!, {
             rereadMoves: list || reader?.reread === "each-move",
@@ -1241,6 +1269,10 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
             const move = step.keys?.every((key) => key === KEY.up || key === KEY.down || (sideways && (key === KEY.left || key === KEY.right))) ?? false;
             // the asking ended under the answer: no further key, whatever the screen shows
             if (!asks()) return promptChanged();
+            if (responder === "fallback-gjc-menu" && body.custom_text !== undefined && committed) {
+              if (!(await customEditorReady(customTyped ? body.custom_text.trim() : ""))) return promptChanged();
+              if (step.text !== undefined) customTyped = true;
+            }
             // GJC's selector can close under the answer: its composer must not take the moves.
             if (move && walked && (list || responder === "fallback-gjc-menu") && !(await onRow())) return promptChanged();
             if (!move && !committed) {
