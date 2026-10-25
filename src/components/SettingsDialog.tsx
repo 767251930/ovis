@@ -20,7 +20,7 @@ import { KeyBarSettings } from "./KeyBarSettings.tsx";
 import { onSettingsHistory, recordSettings, settingsEntry, settingsLevels, type SettingsLevel } from "../lib/settingsHistory.ts";
 import { Segmented, SettingsGroup, SettingsRow, SettingsSelect, Stepper, Toggle } from "./SettingsControls.tsx";
 import { FONT_FAMILY_MAX_CHARS, sanitizeFontFamily } from "../lib/fontFamily.ts";
-import { UI_FONT_MAX, UI_FONT_MIN } from "../lib/typography.ts";
+import { UI_FONT_MAX, UI_FONT_MIN, UI_FONT_PRESET_FAMILY, uiFontPreset, type UiFontPreset } from "../lib/typography.ts";
 import { canListInstalledFonts, filterFamilies, isMonospaceFamily, queryInstalledFonts } from "../lib/installedFonts.ts";
 import type { UpdatesModel } from "../lib/updates.ts";
 import type { UserError } from "../lib/userError.ts";
@@ -85,13 +85,14 @@ function compactKeys(keys: readonly string[]): string {
 
 const FONT_LIST_LIMIT = 150;
 const FONT_FAMILY_PLACEHOLDER = 'D2Coding, "Cascadia Mono"';
+const UI_FONT_PLACEHOLDER = '"Noto Sans JP", "Segoe UI"';
 
 /**
  * A font family list, saved when the field is left, on Enter or when the dialog closes: saving
  * every keystroke would sanitize away the comma or space being typed, and each change of the
  * terminal's font refits the grid and resizes the pane.
  */
-function FontFamilyInput({ value, label, onCommit, fixedWidthFor = null }: { value: string; label: string; onCommit: (family: string) => void; /** the surface that needs every glyph on one advance: a proportional pick from the list is refused in its name */ fixedWidthFor?: "terminal" | null }) {
+function FontFamilyInput({ value, label, onCommit, placeholder = FONT_FAMILY_PLACEHOLDER, fixedWidthFor = null }: { value: string; label: string; onCommit: (family: string) => void; placeholder?: string; /** the surface that needs every glyph on one advance: a proportional pick from the list is refused in its name */ fixedWidthFor?: "terminal" | null }) {
   const t = useT();
   const [draft, setDraft] = useState(value);
   useEffect(() => setDraft(value), [value]);
@@ -145,7 +146,7 @@ function FontFamilyInput({ value, label, onCommit, fixedWidthFor = null }: { val
         <input
           className="input settings-font-input"
           value={draft}
-          placeholder={FONT_FAMILY_PLACEHOLDER}
+          placeholder={placeholder}
           maxLength={FONT_FAMILY_MAX_CHARS}
           aria-label={label}
           spellCheck={false}
@@ -295,6 +296,39 @@ function ThemeSelect({ side }: { side: Mode }) {
   );
 }
 
+/**
+ * Settings → Appearance → Interface font: the built-in stack, the device's own interface font, Noto Sans, or a
+ * list typed like the chat's. Custom opens the field and keeps what is drawn until a list is typed.
+ */
+function InterfaceFontRows() {
+  const { settings, update } = useSettings();
+  const t = useT();
+  const preset = uiFontPreset(settings.uiFontFamily);
+  const [customOpen, setCustomOpen] = useState(preset === "custom");
+  const custom = customOpen || preset === "custom";
+  const choose = (next: UiFontPreset | "custom"): void => {
+    setCustomOpen(next === "custom");
+    if (next !== "custom") update({ uiFontFamily: UI_FONT_PRESET_FAMILY[next] });
+  };
+  return (
+    <>
+      <SettingsRow label={t("Interface font")} description={t("Menus, lists, dialogs and the sidebar; the chat's text follows it until it has a font of its own. The terminal and code keep theirs. System is this device's own interface font.")} htmlFor="settings-ui-font">
+        <SettingsSelect id="settings-ui-font" value={custom ? "custom" : preset} onChange={(event) => choose(event.target.value as UiFontPreset | "custom")}>
+          <option value="default">{t("Default")}</option>
+          <option value="system">{t("System")}</option>
+          <option value="noto">Noto Sans</option>
+          <option value="custom">{t("Custom")}</option>
+        </SettingsSelect>
+      </SettingsRow>
+      {custom && (
+        <SettingsRow label={t("Custom interface font")} description={t("Comma-separated, tried in order, in front of the default. A font this device does not have falls back to the default.")} wide>
+          <FontFamilyInput value={settings.uiFontFamily} label={t("Custom interface font")} placeholder={UI_FONT_PLACEHOLDER} onCommit={(uiFontFamily) => update({ uiFontFamily })} />
+        </SettingsRow>
+      )}
+    </>
+  );
+}
+
 function AppearancePage() {
   const { settings, update } = useSettings();
   const t = useT();
@@ -336,6 +370,7 @@ function AppearancePage() {
       <SettingsRow label={t("Interface font size")} description={t("Menus, lists, dialogs and the sidebar. The chat follows it until it has a size of its own; the terminal keeps its own.")}>
         <Stepper label={t("Interface font size")} value={uiFontSize(settings)} text={`${uiFontSize(settings)}px`} min={UI_FONT_MIN} max={UI_FONT_MAX} decreaseLabel={t("Decrease interface font size")} increaseLabel={t("Increase interface font size")} onChange={(size) => update({ uiFontSize: size })} />
       </SettingsRow>
+      <InterfaceFontRows />
     </SettingsGroup>
     </>
   );

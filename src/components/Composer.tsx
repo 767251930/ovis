@@ -265,7 +265,7 @@ export function Composer({
   activeRef.current = active;
   const machineId = useMachineId();
   const { fetchPaneFiles } = useMachineApi();
-  const { settings } = useSettings();
+  const { settings, resolvedLanguage } = useSettings();
   const mobile = useMediaQuery("(max-width: 640px), (pointer: coarse)");
   const usageEnabled = settings.showUsage && !mobile && machineId === "local" && providerForAgent(agent) !== null;
   const { report: usageReport } = useUsage(usageEnabled);
@@ -422,7 +422,8 @@ export function Composer({
   useEffect(() => {
     const frame = requestAnimationFrame(sizeTextarea);
     return () => cancelAnimationFrame(frame);
-  }, [sizeTextarea, settings.chatFontSize, settings.density]);
+  // the UI language orders Noto's CJK families in an interface font (lib/typography.ts)
+  }, [sizeTextarea, settings.chatFontSize, settings.chatFontFamily, settings.uiFontFamily, resolvedLanguage, settings.density]);
 
   useEffect(() => {
     const element = textareaRef.current;
@@ -495,7 +496,7 @@ export function Composer({
   useEffect(() => {
     const frame = requestAnimationFrame(fitStatus);
     return () => cancelAnimationFrame(frame);
-  }, [fitStatus, settings.uiFontSize,
+  }, [fitStatus, settings.uiFontSize, settings.uiFontFamily,
     settings.chatFontSize, settings.chatFontFamily, settings.density]);
 
   // the card's own width decides, not the window's: a sidebar or a narrow lane shrinks the card
