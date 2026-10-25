@@ -16,7 +16,7 @@ import type { CompletionTracker } from "./completion.ts";
 import { HerdrProfileState, herdrMachineId } from "./herdr-profile-state.ts";
 import { sameSshSession, type HerdrMachineProfile } from "./herdr-profiles.ts";
 import { validateTarget } from "./machine-security.ts";
-import { detectHost, HERDR_INSTALL_CMD } from "./remote-host.ts";
+import { detectHost, HERDR_INSTALL_CMD, installLockOwner } from "./remote-host.ts";
 import { discard, readCappedJson, REMOTE_LIMITS } from "./remote-json.ts";
 import { SshConnection } from "./ssh.ts";
 
@@ -661,7 +661,7 @@ export class MachineManager {
         await this.wait(job);
       }
       job.installationApproved = update || !descriptor;
-      if (update || !descriptor && !hasBundle) { this.stage(job, "installing", `Installing verified ${platform} bundle…`); await host.installBundle(ssh, platform, job.abort.signal, { cacheDir: join(this.stateDir, "bundles"), onProgress: (stage, done, total) => this.progress(job, stage, done, total) }); }
+      if (update || !descriptor && !hasBundle) { this.stage(job, "installing", `Installing verified ${platform} bundle…`); await host.installBundle(ssh, platform, job.abort.signal, { cacheDir: join(this.stateDir, "bundles"), owner: installLockOwner(this.stateDir, runtime.machine.target!), onProgress: (stage, done, total) => this.progress(job, stage, done, total) }); }
       if (!descriptor && !herdrPath && host.installHerdr) { this.stage(job, "installing", "Installing herdr with its own installer…"); herdrPath = await host.installHerdr(ssh); }
       if (ssh.usedSecret) {
         this.stage(job, "installing", "Registering the app SSH key…");
