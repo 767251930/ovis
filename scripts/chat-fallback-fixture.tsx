@@ -9,6 +9,6 @@ function Fixture() {
   const [pane, setPane] = useState("agent");
   const [refresh, setRefresh] = useState(0);
   window.chatFallbackQA = { pane: setPane, agent: setAgent, refresh: () => setRefresh((key) => key + 1) };
-  return <main style={{ height: "100vh" }}><ChatView key={pane} paneId={pane} refreshKey={refresh} connected ended={false} agent={pane === "shell" ? null : agent} /></main>;
+  return <main style={{ height: "100vh" }}><ChatView key={pane} paneId={pane} refreshKey={refresh} connected ended={false} agent={pane === "shell" ? null : agent} conversationPushes={new URLSearchParams(location.search).has("pushes")} /></main>;
 }
 createRoot(document.getElementById("root")!).render(<React.StrictMode><SettingsProvider><Fixture /></SettingsProvider></React.StrictMode>);

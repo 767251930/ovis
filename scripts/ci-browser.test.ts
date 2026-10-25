@@ -77,6 +77,7 @@ describe("browser lane", () => {
     const { text, code, evidence } = await lane();
     expect(code).toBe(0);
     expect(rows(text).map((row) => row.script)).toEqual(["scripts/demo-build.ts", ...serialBrowserScripts()]);
+    expect(rows(text).map((row) => row.script)).toContain("scripts/copilot-chat-browser-qa.ts");
     expect(rows(text).every((row) => row.code === 0 && row.seconds >= 0)).toBe(true);
     expect(evidence).toBe(false);
     expect(text).not.toMatch(/EVIDENCE=.+/);

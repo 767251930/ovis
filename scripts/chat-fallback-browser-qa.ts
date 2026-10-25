@@ -9,6 +9,7 @@ import { CONTENT_SECURITY_POLICY } from "../server/static.ts";
 import { chromePath } from "./chrome-path.ts";
 import { parseClaudeTranscript } from "../server/conversation.ts";
 import type { ConversationTurn } from "../shared/protocol.ts";
+import type {} from "./chat-fallback-fixture.tsx";
 const root = realpathSync(mkdtempSync(join(tmpdir(), "herdr-chat-fallback-")));
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
 let server: ReturnType<typeof Bun.serve> | undefined;
@@ -171,6 +172,36 @@ try {
     console.log("PASS Claude hook narration and replies stay visible outside folded work; the tool remains inside");
   }
   assert.deepEqual(errors, []);
+  structured = false;
+  const polling = await browser.newPage();
+  let pollingReads = 0;
+  polling.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/api/pane/conversation") pollingReads += 1;
+  });
+  await polling.clock.install();
+  await polling.clock.pauseAt(new Date());
+  await polling.addInitScript(() => {
+    localStorage.setItem("ovis:settings", JSON.stringify({ language: "en" }));
+  });
+  await polling.goto(`http://127.0.0.1:${server.port}/?pushes`);
+  await polling.locator(".chat-terminal-fallback summary").waitFor();
+  const codexReads = pollingReads;
+  await polling.clock.runFor(2000);
+  assert.equal(pollingReads, codexReads, "non-Copilot terminal fallback keeps its 10s backstop");
+  const codexBackstop = polling.waitForResponse((response) => new URL(response.url()).pathname === "/api/pane/conversation");
+  await polling.clock.runFor(8000);
+  await codexBackstop;
+  assert.equal(pollingReads, codexReads + 1);
+  const changedAgent = polling.waitForResponse((response) => new URL(response.url()).pathname === "/api/pane/conversation");
+  await polling.evaluate(() => window.chatFallbackQA.agent("copilot"));
+  await changedAgent;
+  const copilotReads = pollingReads;
+  const copilotPoll = polling.waitForResponse((response) => new URL(response.url()).pathname === "/api/pane/conversation");
+  await polling.clock.runFor(2000);
+  await copilotPoll;
+  assert.equal(pollingReads, copilotReads + 1, "only Copilot terminal fallback uses the 2s recovery poll");
+  await polling.close();
+  console.log("PASS fallback polling keeps 10s for other agents and 2s for Copilot under a controlled clock");
   console.log("chat fallback: browser OK (no hidden terminal reads, opened stalled output cannot block structured refresh, late cleanup, non-agent inline output, fallback error announcement and accurate empty state)");
 
 } finally {
