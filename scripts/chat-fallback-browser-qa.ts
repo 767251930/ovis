@@ -8,8 +8,10 @@ import { build as viteBuild } from "vite";
 import { CONTENT_SECURITY_POLICY } from "../server/static.ts";
 import { chromePath } from "./chrome-path.ts";
 import { parseClaudeTranscript } from "../server/conversation.ts";
-import type { ConversationTurn } from "../shared/protocol.ts";
+import type { ConversationTurn, InteractivePrompt } from "../shared/protocol.ts";
 import type {} from "./chat-fallback-fixture.tsx";
+import { parseInteractivePrompt } from "../server/prompt.ts";
+import piNavigation from "../server/fixtures/pi-ask-navigation.json";
 const root = realpathSync(mkdtempSync(join(tmpdir(), "herdr-chat-fallback-")));
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
 let server: ReturnType<typeof Bun.serve> | undefined;
@@ -23,12 +25,13 @@ try {
   let structured = false, resolveAgent!: () => void, agentReadArrived!: () => void;
   let lookupTimeout = false;
   let source = "codex-transcript";
+  let prompt: InteractivePrompt | null = null;
   let turns: ConversationTurn[] = [{ role: "assistant", ts: null, parts: [{ kind: "text", text: "Structured conversation arrived" }] }];
   // resolved by the server's handler: a browser-side waitForRequest can win the race against it
   const agentRead = new Promise<void>((resolve) => { agentReadArrived = resolve; });
   server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
     const url = new URL(request.url), pane = url.searchParams.get("pane_id");
-    if (url.pathname === "/api/pane/prompt") return Response.json({ prompt: null });
+    if (url.pathname === "/api/pane/prompt") return Response.json({ prompt, outcomes: [] });
     // the chat's skill matcher asks for the pane's commands
     if (url.pathname === "/api/pane/commands") return Response.json({ commands: [] });
     if (url.pathname === "/api/pane/conversation") {
@@ -171,6 +174,37 @@ try {
     if (process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, "claude-hook-separate-replies.png") });
     console.log("PASS Claude hook narration and replies stay visible outside folded work; the tool remains inside");
   }
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    prompt = parseInteractivePrompt("pi", piNavigation["custom-empty"])!;
+    const originalId = prompt.id;
+    await page.evaluate(() => { window.chatFallbackQA.agent("pi"); window.chatFallbackQA.refresh(); });
+    const card = page.locator(".prompt-card");
+    await card.waitFor();
+    const back = card.getByRole("button", { name: "Back", exact: true });
+    const question = card.getByRole("button", { name: "单元格内容", exact: true });
+    assert.equal(await back.count(), 0, "native custom editor owns navigation");
+    assert.equal(await question.count(), 0);
+    const input = card.locator("input.input");
+    await input.fill("unsent browser draft");
+    const mountedCard = await card.elementHandle();
+    prompt = parseInteractivePrompt("pi", piNavigation["second-answered"])!;
+    assert.equal(prompt.id, originalId, "leaving the editor does not change question identity");
+    await page.evaluate(() => window.chatFallbackQA.refresh());
+    await back.waitFor();
+    await question.waitFor();
+    assert.equal(await input.inputValue(), "unsent browser draft", "metadata refresh preserves web edits");
+    assert.equal(await mountedCard!.evaluate(node => node.isConnected), true, "the card stays mounted");
+    await input.fill("");
+    assert.equal(await back.isEnabled(), true);
+    assert.equal(await question.isEnabled(), true);
+    if (process.env.UI_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.UI_EVIDENCE_DIR, `pi-navigation-${width}.png`) });
+    // Start the next width with a new occurrence so its initial navigation state is observed.
+    prompt = null;
+    await page.evaluate(() => window.chatFallbackQA.refresh());
+    await card.waitFor({ state: "detached" });
+  }
+  console.log("PASS same-id Pi navigation refresh restores Back/question buttons without losing web drafts at desktop and mobile widths");
   assert.deepEqual(errors, []);
   structured = false;
   const polling = await browser.newPage();

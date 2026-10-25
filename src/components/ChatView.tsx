@@ -1079,10 +1079,11 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
   const [endPresentation, setEndPresentation] = useState<{ state: ChatState; key: string | undefined } | null>(null);
   const [prompt, setPrompt] = useState<InteractivePrompt | null>(null);
   // Each prompt that appears is an occurrence of its own, and gets a card of its own. The prompt's
-  // id is a hash of what it says, so the same question asked twice shares it: the read below keeps
-  // one object while one prompt stays on screen, and that object is what tells them apart.
+  // id is a hash of what it says, so the same question asked twice shares it. Navigation metadata
+  // can change within an occurrence; only another id or a disappearance starts a new card.
   const promptOccurrence = useRef<{ of: InteractivePrompt | null; count: number }>({ of: null, count: 0 });
-  if (prompt !== null && promptOccurrence.current.of !== prompt) promptOccurrence.current = { of: prompt, count: promptOccurrence.current.count + 1 };
+  if (prompt === null) promptOccurrence.current.of = null;
+  else if (promptOccurrence.current.of?.id !== prompt.id) promptOccurrence.current = { of: prompt, count: promptOccurrence.current.count + 1 };
   // turns the transcript holds on a path /tree walked away from: no page can reach them, so the
   // only way to say they exist is to be told, and to say it where the reader would look for them
   const [abandoned, setAbandoned] = useState<{ count: number; branches: number; summary: string | null } | null>(null);
@@ -1486,14 +1487,18 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
     let timer = 0;
     // a restart (the page shown again, a refused answer) keeps the notice and the count of failed reads: only a read that answers clears them
     const readPrompt = async (): Promise<void> => {
-      // the same prompt keeps its object: the composer and the card only change with it
+      // Keep unchanged prompts stable, but refresh navigation without replacing the card's edits.
       const sent = sentKeyRef.current;
       try {
         const next = await fetchPanePromptState(paneId);
         if (!cancelled) {
           failedPromptReads.current = 0;
           setPromptStale(false);
-          setPrompt((current) => current?.id === next.prompt?.id ? current : next.prompt);
+          setPrompt((current) => {
+            if (current === null || next.prompt === null || current.id !== next.prompt.id) return next.prompt;
+            if (JSON.stringify([current.steps, current.can_step_back]) === JSON.stringify([next.prompt.steps, next.prompt.can_step_back])) return current;
+            return { ...current, steps: next.prompt.steps, can_step_back: next.prompt.can_step_back };
+          });
           // unchanged outcomes keep their objects: the turns carrying them are not re-rendered
           setOutcomes((current) => JSON.stringify(current) === JSON.stringify(next.outcomes) ? current : next.outcomes);
           onOutcomesRef.current?.(paneId, next.outcomes.map((outcome) => outcome.id));
