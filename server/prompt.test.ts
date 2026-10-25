@@ -3118,6 +3118,48 @@ describe("pi's dialogs", () => {
   });
 });
 
+// Pi's thinking-selector layout with fictional offered levels; no installed Pi dependency.
+const PI_THINKING_HINT = "Enter to select · Ctrl+S to set as default · Escape/Ctrl+C to cancel";
+function piThinking(at = 1, narrow = false, levels = ["off", "medium", "max"], query = ""): string {
+  return ["Thinking Level", "", "Shift+Tab cycles thinking levels in-session", "", `> ${query}`, "",
+    ...levels.map((level, index) => `${index === at ? "→" : " "} ${level === "medium" ? "✓" : " "} ${level}${narrow ? "" : `    ${level === "max" ? "Maximum reasoning · default" : "Reasoning description"}`}`), "",
+    narrow ? "  Enter to\nselect ·\nCtrl+S to set\nas default ·\nEscape/Ctrl+C\nto cancel" : PI_THINKING_HINT,
+    "────────────────────────────", "/tmp/fictional", "0.0%/215k (auto)",
+  ].join("\n");
+}
+
+describe("pi's thinking selector", () => {
+  test("separates current/default/highlight across widths and keeps cursor movement out of identity", () => {
+    const wide = parseInteractivePrompt("pi", piThinking(2))!;
+    const narrow = parseInteractivePrompt("pi", piThinking(2, true))!;
+    expect(wide.question).toBe("Select thinking level (currently medium)");
+    expect(wide.options[2]).toEqual({ label: "max", description: "Maximum reasoning · default" });
+    expect(narrow.options).toEqual(["off", "medium", "max"].map((label) => ({ label, description: null })));
+    expect(narrow.question).toBe(wide.question);
+    expect(parseInteractivePrompt("pi", piThinking(0))!.id).toBe(wide.id);
+    expect(answerKeys(wide, { option_index: 0 })).toEqual([{ keys: ["up"] }, { keys: ["up"] }, { keys: ["enter"] }]);
+  });
+
+  test("offers only visible levels, even a single supported or filtered row", () => {
+    const levels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+    expect(labels(parseInteractivePrompt("pi", piThinking(4, true, levels)))).toEqual(levels);
+    for (const query of ["", "max"]) {
+      expect(labels(parseInteractivePrompt("pi", piThinking(0, true, ["max"], query)))).toEqual(["max"]);
+    }
+  });
+
+  test("refuses empty, unknown, incomplete and stale drawings", () => {
+    const screen = piThinking();
+    for (const drawn of [
+      piThinking(0, true, []), piThinking(0, true, ["unknown"]), screen.replace("Thinking Level", "Models"),
+      screen.replace("> ", "search: "), screen.replace(PI_THINKING_HINT, "Enter to select"),
+      screen.replace("→ ✓ medium", "  ✓ medium"), screen + "\nAnswer output\nMore output\n> next message",
+      piThinking(1, true) + "\nAnswer output\nMore output\n> next message",
+      screen.replace("    max", "    unknown"),
+    ]) expect(parseInteractivePrompt("pi", drawn)).toBeNull();
+  });
+});
+
 // Both screens captured from pi 0.87.1 running /model in a pane of its own, at 140 columns and
 // at 46, with the catalogue already settled.
 describe("pi's model list", () => {
@@ -4786,6 +4828,10 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
         draw: (at) => `────────────────────────────────────────\n\nOnly showing models from configured providers. Use /login to add providers.\n>\n\n${at === 0 ? "→" : " "} ✓ vllm/Qwen/Qwen3.8-27B [lwsa-platform] · default\n${at === 1 ? "→" : " "}   vllm-flash/Qwen3.8-Flash-Next [lwsa-platform]\n Enter to select · Ctrl+S to set as default · Escape/Ctrl+C to cancel\n────────────────────────────────────────${FOOTER}`,
       },
       {
+        name: "pi's thinking level, reread at a narrower width", agent: "pi", status: "idle", rows: 3, start: 2,
+        choice: { option_index: 0 }, sent: ["up", "up", "enter"], draw: (at) => piThinking(at, at === 0),
+      },
+      {
         name: "OmO's model list", agent: "omo", status: "idle", rows: 3, choice: { option_index: 2 }, sent: ["down", "down", "enter"],
         draw: (at) => `Only showing models from configured providers. Use /login to add providers.\nenter select  ctrl+s select as default  ctrl+f favorite\n>\n${["claude-opus-4-8 [anthropic] ✓", "claude-fable-5 [anthropic]", "gpt-5.5 [chatgpt-subscription]"].map((row, index) => `${at === index ? "→" : " "}   ${row}`).join("\n")}\n  Model Name: Claude Opus 4.8\n${"─".repeat(40)}\n/tmp/app • $0.000 (sub) • 0/1M (0.0%) (auto)  (anthropic) claude-opus-4-8 • effort medium\n(😺 OmO Native)\n`,
       },
@@ -4890,6 +4936,7 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
     const cases = [
       { id: "omo-model", agent: "omo", move: "down", rereadMoves: false, draw: (at: number) => providerList("omo", at) },
       { id: "pi-model", agent: "pi", move: "down", rereadMoves: false, draw: (at: number) => providerList("pi", at) },
+      { id: "pi-thinking", agent: "pi", move: "down", rereadMoves: false, draw: piThinking },
       { id: "claude-model", agent: "claude", move: "down", rereadMoves: true, draw: claudeModelList },
       { id: "claude-effort", agent: "claude", move: "right", rereadMoves: true, draw: claudeEffort },
       { id: "codex-model", agent: "codex", move: "down", rereadMoves: true, draw: codexModels },

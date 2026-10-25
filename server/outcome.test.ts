@@ -12,6 +12,7 @@ import * as processStart from "./process-start.ts";
 import { registry } from "./dialogs/registry.ts";
 import { source as claudeSource } from "./skills/claude.ts";
 import { source as ompSource } from "./skills/omp.ts";
+import { source as piSource } from "./skills/pi.ts";
 
 const at = Date.parse("2026-10-20T00:00:00Z");
 const row = (name: string, interaction: "none" | "dialog" | "terminal" | "unknown" = "none"): SlashCommand => ({
@@ -348,6 +349,33 @@ async function withFakeHerdr(pane: { agent: string; status: string; screen: stri
     rmSync(root, { recursive: true, force: true });
   }
 }
+
+it("correlates Pi's thinking card and session-only commit with bare /thinking, not /model", async () => {
+  const pane = {
+    pane_id: "fixture", workspace_id: "w", tab_id: "t", terminal_id: "fixture-terminal",
+    focused: false, revision: 0, agent: "pi", agent_status: "idle", status: "idle", screen: "Ready",
+  };
+  await withFakeHerdr(pane, async (paneId, keys) => {
+    const catalog = ["thinking", "model"].map((name) => ({ ...row(name), forms: piSource.forms?.[name] }));
+    const command = commandSendFrom(pane, "pi", catalog, "/thinking")!;
+    noteSubmitted(paneId, command.text, command);
+    pane.screen = "Thinking Level\n\nShift+Tab cycles thinking levels in-session\n\n>\n\n→ ✓ medium\n    high\n\nEnter to select · Ctrl+S to set as default · Escape/Ctrl+C to cancel\n────────────────────\n/tmp/fixture\n0.0%/215k (auto)";
+    const shown = await served(paneId);
+    expect(command.dialogObserved).toBe(true);
+    expect(command.dialogId).toBe(shown.prompt?.id);
+    const url = new URL("http://localhost/api/pane/prompt/answer");
+    const response = await handlePromptRequest(new Request(url, { method: "POST", body: JSON.stringify({ pane_id: paneId, prompt_id: shown.prompt!.id, option_index: 0 }) }), url);
+    expect(response?.status).toBe(200);
+    expect(keys).toEqual([["enter"]]);
+    expect((await served(paneId)).outcomes).toMatchObject([{ id: command.id, state: "result-observed", evidence: [{ kind: "dialog" }] }]);
+    pane.screen = "Ready again";
+    const model = commandSendFrom(pane, "pi", catalog, "/model")!;
+    noteSubmitted(paneId, model.text, model);
+    pane.screen = "Thinking Level\n\n>\n\n→ ✓ medium\n\nEnter to select · Ctrl+S to set as default · Escape/Ctrl+C to cancel";
+    await served(paneId);
+    expect(model.dialogObserved).not.toBe(true);
+  });
+});
 
 const fixture = (name: string): string => readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8");
 const promptUrl = (paneId: string): URL => new URL(`http://localhost/api/pane/prompt?pane_id=${paneId}`);
