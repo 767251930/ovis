@@ -239,7 +239,8 @@ export interface TranscriptParser {
   snapshot(tail?: string): ConversationTurn[];
 }
 
-type OmpTranscriptOptions = { toolImages?: boolean; taskTitles?: Map<string, string> };
+/** `callIds`: each tool part carries its call's own id (gjc, whose rewrites the chat matches by it) */
+type OmpTranscriptOptions = { toolImages?: boolean; callIds?: boolean; taskTitles?: Map<string, string> };
 
 interface OmpParseState {
   turns: ConversationTurn[];
@@ -263,10 +264,10 @@ function ompParseState(options: OmpTranscriptOptions): OmpParseState {
  * notification. Merging across it folded the answer before it into the next turn's work block.
  */
 export function createOmpTranscriptParser(options: OmpTranscriptOptions = {}): TranscriptParser {
-  return ompTranscriptParser(ompParseState(options), options.toolImages === true);
+  return ompTranscriptParser(ompParseState(options), options.toolImages === true, options.callIds === true);
 }
 
-function ompTranscriptParser(state: OmpParseState, toolImages: boolean): TranscriptParser {
+function ompTranscriptParser(state: OmpParseState, toolImages: boolean, callIds: boolean): TranscriptParser {
   const { turns, pending, taskTitles } = state;
   const assistantTurn = (ts?: string): ConversationTurn => {
     const last = turns[turns.length - 1];
@@ -373,6 +374,7 @@ function ompTranscriptParser(state: OmpParseState, toolImages: boolean): Transcr
               summary: summary.slice(0, 120),
               input: JSON.stringify(input, null, 2),
               output: "",
+              ...(callIds && typeof b.id === "string" ? { call_id: b.id } : {}),
             };
             turn.parts.push(part);
             if (typeof b.id === "string") pending.set(b.id, part);
@@ -398,7 +400,7 @@ function ompTranscriptParser(state: OmpParseState, toolImages: boolean): Transcr
         // Clone the whole graph together: pending must point at the preview's tool parts,
         // and neither speculative title updates nor settled boundaries may escape it.
         const preview = structuredClone(state);
-        ompTranscriptParser(preview, toolImages).write(tail);
+        ompTranscriptParser(preview, toolImages, callIds).write(tail);
         return preview.turns.filter((turn) => turn.parts.length > 0);
       }
       return structuredClone(turns.filter((turn) => turn.parts.length > 0));
@@ -409,7 +411,7 @@ function ompTranscriptParser(state: OmpParseState, toolImages: boolean): Transcr
 /** One-shot parsing shares the incremental record rules, including valid no-newline tails. */
 export function parseOmpTranscript(text: string, maxTurns = MAX_TURNS, options: OmpTranscriptOptions = {}): ConversationTurn[] {
   const state = ompParseState(options);
-  ompTranscriptParser(state, options.toolImages === true).write(text);
+  ompTranscriptParser(state, options.toolImages === true, options.callIds === true).write(text);
   // No writer survives this call, so its owned turns need no detached snapshot.
   return state.turns.filter((turn) => turn.parts.length > 0).slice(-maxTurns);
 }

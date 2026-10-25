@@ -9,6 +9,7 @@ import { MAX_TURNS, parseOmpTranscript } from "./transcript-records.ts";
 import { turnStarts } from "./transcript-turns.ts";
 import { claudeImageType } from "./claude-transcript.ts";
 import { toolVerb } from "../src/lib/toolVerbs.ts";
+import { continuesHistory } from "../src/lib/chatRows.ts";
 import type { ConversationTurn } from "../shared/protocol.ts";
 import { parseAgyTranscript } from "./agy.ts";
 import { agyStoreFromLocks } from "./agy-store.ts";
@@ -1291,6 +1292,28 @@ describe("gjc sessions", () => {
     session(dir, "only.jsonl", "/home/u/project", "2026-09-20T00:00:00.000Z");
     writeFileSync(join(dir, ".gjc-managed-session-scope.v2.json"), JSON.stringify({ canonicalPath: "/home/u/project" }));
     await expect(gjcTranscriptPath("w9999:p9999", "/home/u/project", home)).rejects.toThrow(ConversationUnavailable);
+  });
+
+  it("carries each tool call's own id, so a rewind that calls the same tool again is no continuation", () => {
+    const home = mkdtempSync(join(tmpdir(), "herdr-gjc-ids-")); roots.push(home);
+    const path = join(home, "session.jsonl");
+    const line = (timestamp: string, message: Record<string, unknown>) => JSON.stringify({ type: "message", timestamp, message });
+    const read = (id: string, at: string, file: string, text: string[] = []) => line(at, { role: "assistant", stopReason: "toolUse", content: [
+      ...text.map((words) => ({ type: "text", text: words })), { type: "toolCall", id, name: "read", arguments: { path: file } },
+    ] });
+    const opening = [
+      line("2026-10-25T00:00:00.000Z", { role: "user", content: [{ type: "text", text: "Read the files." }] }),
+      read("c1", "2026-10-25T00:00:01.000Z", "src/alpha.ts", ["Reading."]),
+    ];
+    const page = (records: string[]) => { writeFileSync(path, `${records.join("\n")}\n`); forgetTranscriptState(); return transcriptPage("gjc-transcript", path); };
+    try {
+      const shown = page([...opening, read("c2", "2026-10-25T00:00:02.000Z", "src/beta.ts")]);
+      expect(shown.turns.at(-1)!.parts.flatMap((part) => part.kind === "tool" ? [part.call_id] : [])).toEqual(["c1", "c2"]);
+      // written again with the same calls (a trim): the chat goes on
+      expect(continuesHistory(shown, page([...opening, read("c2", "2026-10-25T00:00:02.000Z", "src/beta.ts")]))).toBe(true);
+      // a rewind that read the same file again under another call, later, in the turn that keeps its start
+      expect(continuesHistory(shown, page([...opening, read("c3", "2026-10-25T00:00:05.000Z", "src/beta.ts")]))).toBe(false);
+    } finally { forgetTranscriptState(); }
   });
 
   it("shows a failed request's error instead of an empty answer", () => {
