@@ -777,7 +777,11 @@ async function readKnownPrompt(
     const colors = await paneRead({ paneId, source: "visible", format: "ansi", timeoutMs: SUGGESTION_READ_MS }).then(read => read.text, () => null);
     const scrollAfter = await paneScrollInfo(paneId).catch(() => null);
     screen = await liveScreen(paneId);
-    if (colors !== null && viewportShowsLive(scrollBefore, scrollAfter, colors, before, screen)) screen = colors;
+    // Bottom offsets alone cannot prove that the styled read captured the same question.
+    const text = (value: string): string => value.replace(ANSI_RE, "").replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g, "")
+      .split(/\r?\n/).map(line => line.trimEnd()).join("\n").trimEnd();
+    if (colors !== null && viewportShowsLive(scrollBefore, scrollAfter, colors, before, screen)
+      && text(colors) === text(screen)) screen = colors;
   }
   // omo's form reads its text from the session's call, the screen showing where the form stands
   const omoAsks = ["omo", "pi", "claude", ""].includes(agent) && pane.cwd && OMO_FORM_RE.test(screen)

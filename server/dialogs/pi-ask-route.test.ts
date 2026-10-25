@@ -221,6 +221,17 @@ test("Pi ask does not mistake a scrolled or mismatched viewport for the live sel
   });
 });
 
+test("Pi ask refuses an answer when the bottom viewport shows an older question", async () => {
+  await withPane(navigation["first-after-one"], async pane => {
+    const card = await pane.card();
+    pane.visible = navigation["first-after-one"];
+    pane.screen = navigation.second;
+    expect(await pane.answer(card.id, { option_index: 0 })).toBe(409);
+    expect(pane.sent).toEqual([]);
+    expect((await pane.card()).question).toBe("结果使用哪种类型？");
+  });
+});
+
 test("system-theme review returns to the clicked first question, not the second, including incomplete forms", async () => {
   const state = (name: string) => system.states.find(item => item.name === name)!.screen;
   await withPane(state("review-incomplete"), async pane => {
