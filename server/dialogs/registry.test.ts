@@ -91,7 +91,7 @@ const order: Record<string, readonly string[]> = {
   omo: ["omo-model", "omo-question", "omo-typing", "omo-review", "omo-pending", "fallback-menu", "fallback-gjc-menu", "fallback-keys"],
   omp: ["omp-question", "omp-submit", "omp-approval", "omp-model", "omp-handoff", "fallback-menu", "fallback-gjc-menu", "fallback-keys"],
   opencode: ["opencode-question", "opencode-v1-question", "fallback-menu", "fallback-gjc-menu", "fallback-keys"],
-  pi: ["pi-thinking", "pi-model", "omo-model", "pi-question", "pi-confirm", "pi-input", "omo-question", "omo-typing", "omo-review", "omo-pending", "fallback-menu", "fallback-gjc-menu", "fallback-keys"],
+  pi: ["pi-thinking", "pi-model", "omo-model", "pi-ask-question", "pi-ask-submit", "pi-question", "pi-confirm", "pi-input", "omo-question", "omo-typing", "omo-review", "omo-pending", "fallback-menu", "fallback-gjc-menu", "fallback-keys"],
 };
 
 describe("dialog reader order", () => {
