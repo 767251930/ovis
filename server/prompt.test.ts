@@ -3969,6 +3969,51 @@ describe("an answer and the menu it was made for", () => {
     return { status: response.status, code: body.error?.code };
   }
 
+  test.each(["whole", "heading-only", "command-only", "command-middle"])("refuses an old cmd heredoc card with a quoted native frame (%s)", async (layout) => {
+    const screen = (prefix: string) => {
+      const shown = [
+        "─".repeat(60), "", "Execute Shell Command",
+        `Command Code needs to execute ${prefix}; cat <<'EOF'`,
+        "─".repeat(40), "", "Execute Shell Command", "Command Code needs to execute echo quoted.", "EOF.",
+        "", "Press [ctrl+e] to explain this command", "",
+        "❯ 1. Yes", "  2. Yes, don't ask again for `printf` commands in this project",
+        "  3. No, tell Command Code what to do differently", "",
+        "↑/↓ navigate · enter select · ctrl+e explain · Run cmd --yolo to bypass all permissions (Docs ↗)",
+      ];
+      if (layout === "command-middle") return ["  printf a", `  ${prefix}`, "  cat <<'EOF'", ...shown.slice(4)].join("\n");
+      return layout === "command-only"
+        ? [`  ${prefix}; cat <<'EOF'`, ...shown.slice(4)].join("\n")
+        : shown.slice(layout === "heading-only" ? 2 : 0).join("\n");
+    };
+    await withPane("cmd", "blocked", screen("printf harmless"), async (pane) => {
+      const first = await card();
+      expect(first).not.toBeNull();
+      if (first === null) throw new Error("cmd permission fixture did not produce a card");
+      pane.screen = screen("printf secrets >/tmp/leaked");
+      expect(await answer(first.id, { option_index: 0 })).toEqual({ status: 409, code: "prompt_changed" });
+      expect(pane.sent).toEqual([]);
+    });
+  });
+
+  test("refuses an old cmd heredoc card after delimiter indentation changes execution", async () => {
+    const screen = (indent: string) => [
+      "─".repeat(40), "", "Execute Shell Command", "Command Code needs to execute cat <<'EOF'",
+      "─".repeat(40), `${indent}EOF`, "printf secrets >/tmp/leaked", ": <<'EOF'", "EOF", "printf done.",
+      "", "Press [ctrl+e] to explain this command", "", "❯ 1. Yes",
+      "  2. Yes, don't ask again for `cat` commands in this project",
+      "  3. No, tell Command Code what to do differently", "",
+      "↑/↓ navigate · enter select · ctrl+e explain · Run cmd --yolo to bypass all permissions (Docs ↗)",
+    ].join("\n");
+    await withPane("cmd", "blocked", screen("  "), async (pane) => {
+      const first = await card();
+      expect(first).not.toBeNull();
+      if (first === null) throw new Error("cmd heredoc fixture did not produce a card");
+      pane.screen = screen("");
+      expect(await answer(first.id, { option_index: 0 })).toEqual({ status: 409, code: "prompt_changed" });
+      expect(pane.sent).toEqual([]);
+    });
+  });
+
   const omoRule = "─".repeat(100);
   const omoWidget = (box = "❯") => `? Question pending (1 unanswered) · 30m
  QA — Which one?

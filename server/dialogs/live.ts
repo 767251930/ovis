@@ -8,6 +8,7 @@ import { OMP_CLIPPED_SINGLE_HINT_RE, OMP_MULTI_CLIPPED_HINT_RE, OMP_MULTI_HINT_R
 import { HERMES_HINT_RE } from "./hermes.ts";
 import { PI_INPUT_HINT_RE, PI_MENU_HINT_RE, PI_THINKING_HINT_LINES } from "./pi.ts";
 import { openCodeV1QuestionActive } from "./opencode.ts";
+import { cmdFooterStart } from "./cmd.ts";
 
 /**
  * A row of OmO's omo-task widget under the input box (omo-ai plugin/extensions/omo-task.js): a live row
@@ -157,7 +158,7 @@ export function promptTailIsActive(prompt: ParsedPrompt, screen: string): boolea
   }
   // Command Code's permission footer names its keys at the dialog's end and wraps on a narrow
   // pane: `↑/↓ navigate · enter select · ctrl+e explain · Run cmd --yolo to bypass all …`
-  if (prompt.responder === "cmd-question") return cmdFooterEnds(shown);
+  if (prompt.responder === "cmd-question") return cmdFooterStart(shown) >= 0;
   // its footer ends the screen, wrapped or not (dialogs/opencode.ts)
   if (prompt.responder === "opencode-v1-question") return openCodeV1QuestionActive(screen);
   return ends(/ctrl\+g to edit|shift\+tab to approve with this feedback/i);
@@ -171,19 +172,6 @@ export function promptTailIsActive(prompt: ParsedPrompt, screen: string): boolea
  */
 const PI_MENU_HINT_AT_END_RE = new RegExp(`${PI_MENU_HINT_RE.source}$`, "i");
 const PI_INPUT_HINT_AT_END_RE = new RegExp(`${PI_INPUT_HINT_RE.source}$`, "i");
-/** Command Code's permission footer: `↑/↓ navigate · enter select · ctrl+e explain · Run cmd --yolo …` */
-const CMD_HINT_RE = /↑\/↓ navigate.*enter select/i;
-const CMD_FOOTER_WORDS = new Set(["·", "ctrl+e", "explain", "run", "cmd", "--yolo", "to", "bypass", "all", "permissions", "(docs", "↗)", "↗", "(docs↗)"]);
-/**
- * The footer ends the screen: after its key hint only the footer's own words may follow, wrapped or
- * not. A line typed below a quoted or stale dialog (`❯ my next message`) means it is no live one.
- */
-function cmdFooterEnds(shown: string[]): boolean {
-  const at = findLastIndex(shown, (line) => CMD_HINT_RE.test(line));
-  if (at < 0 || shown.length - at > 3) return false;
-  const rest = [shown[at]!.replace(/^.*?enter select/i, ""), ...shown.slice(at + 1)].join(" ");
-  return rest.split(/\s+/).filter(Boolean).every((word) => CMD_FOOTER_WORDS.has(word.toLowerCase()));
-}
 /** The same hint told from the end, so lines that follow it cannot complete a match of their own. */
 const PI_MODEL_HINT_AT_END_RE = new RegExp(`${PI_MODEL_HINT_RE.source}$`, "i");
 /**

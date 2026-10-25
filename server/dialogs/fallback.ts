@@ -187,7 +187,8 @@ function steadyFields(question: string | undefined, body: string | null, steady:
  * line's spinner, time and token count are the one thing it leaves out (steadyReader).
  */
 function screenCard(lines: string[], shown: number[], steady: SteadyReader, parsed: ParsedPrompt, cursorRows?: ReadonlySet<number>): InteractivePrompt {
-  const screen = shown.map((index) => {
+  // A cmd heredoc's indentation and separators can change which text is executable.
+  const screen = parsed.agent === "cmd" ? lines.join("\n") : shown.map((index) => {
     const line = cleanLine(lines[index]!);
     // GJC moves its cursor within the same menu; the selectedIndex is checked separately on reread.
     return steady.read(cursorRows?.has(index) ? line.replace(GJC_SELECTED_RE, "") : line);
