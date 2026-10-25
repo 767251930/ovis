@@ -1809,6 +1809,13 @@ Alert rows of the table above from the `--droplet-*` roles in `src/styles.css`.
 - Markdown supports headings, lists (a task item `- [x]` / `- [ ]` shows a checked or empty box in
   place of its bullet, not clickable), links, quotes, tables, inline/fenced code and code-copy
   actions.
+  A long press on a rendered link in the Android app opens the phone's sheet (RowMenu,
+  `MarkdownLinkMenu.tsx`) with **Copy link**, **Open link** (the tap's own way) and, where the
+  WebView has `navigator.share`, **Share link**; the link's words are its title, the address under
+  them. Android's WebView draws no link menu of its own, while Chrome, Safari and the iOS app's
+  WKWebView do, and keep theirs: the sheet follows Android Chrome's link menu, cut to those three.
+  Only the WebView's own long press (its `contextmenu`, not a mouse's) opens it, so a tap, a swipe
+  and a press on other words keep their meaning.
   Markdown files use the same renderer in the file viewer. **Open in a new tab** opens an
   app link to the resolved absolute file on its own PC, independent of the originating pane.
   **Open raw file** (Code glyph) opens the original bytes; Download still saves those bytes.

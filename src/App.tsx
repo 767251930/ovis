@@ -75,6 +75,7 @@ import { useAlertSignals } from "./lib/useAlertSignals.ts";
 import { useNotificationState, useNotificationSwitch } from "./lib/useNotifications.ts";
 import { alertsBell } from "./lib/alertsBell.ts";
 import { Droplet } from "./components/Droplet.tsx";
+import { MarkdownLinkMenu } from "./components/MarkdownLinkMenu.tsx";
 import { paneDragData, PANE_DRAG_TYPE, slotSide, type SplitSlot } from "./lib/split.ts";
 import { useLayoutNotice, useLayoutRefused } from "./lib/useLayoutNotice.ts";
 import { PaneFollowContext } from "./lib/paneSubmitContext.ts";
@@ -896,6 +897,7 @@ export function App() {
       <CommandPalette key={selectedMachineId} machines={machines} onSelect={selectTarget} open={paletteOpen} initialQuery={paletteQuery} onClose={() => setPaletteOpen(false)} snapshot={snapshot} online={selectedMachine?.state === "connected"} selectedPaneId={selectedPaneId}
         // a peek shows the terminal: its toggle says Switch to chat, which ends the peek
         view={terminalPeek !== null ? "terminal" : view} actions={actions} />
+      <MarkdownLinkMenu />
     </div></MachineContext.Provider></MachineSessionsProvider>
   );
 }
