@@ -62,7 +62,8 @@ import { parseConversationMetadata } from "./conversation-metadata.ts";
 import { answerVersion, ConversationNotStarted, ConversationUnavailable, type ConversationPage, HistoryChanged, type RecognizedConversation, type StreamSource, TRANSCRIPT_WINDOW_BYTES } from "./conversation-shared.ts";
 import { forgetHermesTranscriptState, hermesConversationPage, hermesToolOutput, hermesTranscriptForPane } from "./hermes.ts";
 
-import { createOmpTranscriptParser, isContextClear, MAX_TURNS, parseOmpTranscript, piImageBlock, piMessage, piResults, type TranscriptParser } from "./transcript-records.ts";
+import { createOmpTranscriptParser, isContextClear, MAX_TURNS, omoTaskResults, parseOmpTranscript, PI_PROMPT_IMAGE_REF, piImageBlock, piMessage, piNotice, piPromptImages, piResults, type TranscriptParser } from "./transcript-records.ts";
+import { skillPromptMessage } from "./skill-activity.ts";
 import { CLAUDE_IMAGE_REF, claudeImageType, claudeResultText, createClaudeTranscriptParser, parseClaudeTranscript, type TranscriptEntry } from "./claude-transcript.ts";
 import { forgetSubagents, lineNotifications, subagentDetails, type SubagentDetail } from "./claude-subagents.ts";
 import { launchedAgents } from "./launched-agents.ts";
@@ -445,7 +446,7 @@ function parseTurns(source: RecognizedConversation["source"], path: string, text
     // only pi keeps a tool's images in the entry as base64; omp, omo and gjc are read the same
     // way but would carry image refs nothing can answer, so the option stays with pi alone
     : source === "claude-transcript" ? parseClaudeTranscript(text, Infinity, { subagents: subagentsOnPage(path, text), noticed })
-      : parseOmpTranscript(text, Infinity, { toolImages: source === "pi-transcript" || source === "cmd-transcript", callIds: source === "gjc-transcript", taskTitles });
+      : parseOmpTranscript(text, Infinity, { images: source === "pi-transcript" || source === "cmd-transcript", callIds: source === "gjc-transcript", taskTitles });
 }
 
 type IncrementalSource = "codex-transcript" | "omp-transcript" | "claude-transcript";
@@ -1465,7 +1466,7 @@ function transcriptPageRead(source: StreamSource, path: string, page: Conversati
  * image. Codex uses a hash of the native attachment and searches only the bound history.
  */
 export async function conversationImage(paneId: string, ref: string, codexHome?: string, opencodeDb?: string): Promise<{ mediaType: string; bytes: Uint8Array<ArrayBuffer> } | null> {
-  if (!CLAUDE_IMAGE_REF.test(ref) && !CODEX_IMAGE_REF.test(ref) && !PI_IMAGE_REF.test(ref) && !OPENCODE_IMAGE_REF.test(ref)) return null;
+  if (!CLAUDE_IMAGE_REF.test(ref) && !CODEX_IMAGE_REF.test(ref) && !PI_IMAGE_REF.test(ref) && !PI_PROMPT_IMAGE_REF.test(ref) && !OPENCODE_IMAGE_REF.test(ref)) return null;
   const snapshot = await sessionSnapshot();
   const pane = snapshot.panes.find((candidate) => candidate.pane_id === paneId);
   if (pane === undefined || typeof pane.cwd !== "string" || pane.cwd.length === 0) return null;
@@ -1820,28 +1821,53 @@ function piToolOutput(path: string, ref: string): string | null {
 }
 
 /**
- * The image a pi tool call returned, by the ref the page gave it (`pi:<call id>:<nth image>`).
- * Like the output, it is read on the active branch only: an image from a branch a /tree
- * abandoned is one the chat never showed, so it is not offered.
+ * A picture in a pi conversation, by the ref the page gave it: one a tool call returned
+ * (`pi:<call id>:<nth image>`) or one sent in a prompt (`pi-prompt:<entry id>:<nth image>`).
+ * Like the output, it is read on the active branch only, after the last clear: a picture from a
+ * branch a /tree abandoned, or from before a clear, is one the chat never shows, so it is not offered.
+ * The records are read as the parser reads them (parseOmpTranscript): a tool's picture comes only from
+ * the result that answers a call it draws, and a prompt's only from a prompt it draws.
  */
 export function piTranscriptImage(path: string, ref: string): { mediaType: string; bytes: Uint8Array<ArrayBuffer> } | null {
-  const match = PI_IMAGE_REF.exec(ref);
+  const tool = PI_IMAGE_REF.exec(ref);
+  const match = tool ?? PI_PROMPT_IMAGE_REF.exec(ref);
   if (match === null || match[1] === undefined || match[2] === undefined) return null;
-  const [, callId, nth] = match;
+  const [, id, nth] = match;
   let size: number;
   let branch: ReturnType<typeof piBranchSegments>;
   try { size = statSync(path).size; branch = piBranchSegments(path, size); } catch { return null; }
   if (branch === null) return null;
+  // only a record that can be a clear or names the id is parsed, both however JSON writes them: an
+  // escaped clear or id is still one to the parser
+  const clears = jsonTextPattern("context_clear").pattern;
+  const names = jsonTextPattern(id).pattern;
+  // the parser's state for this one id: whether a call it draws waits for its result, and the first
+  // picture it names after the last clear (undefined: none yet; an answer with no such picture names
+  // nothing, and a call made again can still name one)
+  let open = false;
+  let found: { media_type: string; data: string } | null | undefined;
   for (const line of piBranchRecords(path, size)) {
-    if (!line.includes(callId)) continue;
+    const clear = clears.test(line);
+    if (!clear && (found !== undefined || !names.test(line))) continue;
     let entry: unknown;
     try { entry = JSON.parse(line); } catch { continue; }
+    if (entry === null || typeof entry !== "object") continue;
+    if (isContextClear(entry, "pi-transcript")) { open = false; found = undefined; continue; }
+    if (found !== undefined) continue;
+    // what the parser draws as something other than a message carries no picture of its
+    if (skillPromptMessage(entry) !== null || piNotice(entry) !== null || omoTaskResults(entry, new Map()) !== null || (entry as { type?: unknown }).type === "compaction") continue;
     const message = piMessage(entry);
     if (message === null) continue;
-    const image = piImageBlock(message, callId, Number(nth));
-    if (image !== null) return { mediaType: image.media_type, bytes: new Uint8Array(Buffer.from(image.data, "base64")) };
+    if (tool !== null) {
+      // an assistant record opens its calls before the results beside them; any other only answers
+      if (message.role === "assistant" && Array.isArray(message.content) && message.content.some((block: unknown) => { const call = block as { type?: unknown; name?: unknown; id?: unknown }; return call.type === "toolCall" && typeof call.name === "string" && call.id === id; })) open = true;
+      // the first result for a waiting call is the one drawn; a later one, or one with no call, is not
+      if (open && piResults(message).some((result) => result.id === id)) { open = false; found = piImageBlock(message, id, Number(nth)) ?? undefined; }
+    } else if (message.role === "user" && (entry as { id?: unknown }).id === id) {
+      found = piPromptImages(entry, message).find((picture) => picture.ref === ref);
+    }
   }
-  return null;
+  return found ? { mediaType: found.media_type, bytes: new Uint8Array(Buffer.from(found.data, "base64")) } : null;
 }
 
 const PI_IMAGE_REF = /^pi:([A-Za-z0-9_:.\-]{1,128}):(\d{1,3})$/;

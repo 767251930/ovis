@@ -4,7 +4,7 @@ import { claudeCommandEcho } from "./skill-invocations/claude.ts";
 import { agentTaskResult, claudePeerId, claudePeerNotice, isContextClear, MAX_TURNS, toolSummary, type TranscriptParser } from "./transcript-records.ts";
 import { taskNotification, type SubagentDetail } from "./claude-subagents.ts";
 import { trimOutput } from "./tool-output.ts";
-import { imageType, MAX_IMAGE_BYTES } from "./codex-images.ts";
+import { base64Size, inlineImageType, MAX_IMAGE_BYTES } from "./codex-images.ts";
 
 /** Slash-command and bookkeeping entries Claude logs as user turns — not conversations. */
 export function isCommandEntry(text: string): boolean {
@@ -158,9 +158,6 @@ export function claudeResultText(output: unknown): string {
       : "";
 }
 
-/** The image types a chat shows; anything else stays out of the page. */
-export const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
-
 /**
  * A Claude image's ref: the entry, the block, and for a picture a tool returned its place in the
  * result. The parser names only what transcriptImage can read back by it.
@@ -174,15 +171,8 @@ export const CLAUDE_IMAGE_REF = /^([0-9a-f-]{8,64}):(\d{1,3})(?::(\d{1,3}))?$/i;
  */
 export function claudeImageType(block: unknown): string | null {
   const image = block as { type?: unknown; source?: { type?: unknown; media_type?: unknown; data?: unknown } } | null | undefined;
-  if (image?.type !== "image" || image.source?.type !== "base64" || typeof image.source.data !== "string") return null;
-  if (typeof image.source.media_type !== "string" || !IMAGE_TYPES.has(image.source.media_type)) return null;
-  if (base64Size(image.source.data) > MAX_IMAGE_BYTES) return null;
-  return imageType(Buffer.from(image.source.data.slice(0, 16), "base64"));
-}
-
-/** How many bytes a base64 string decodes to, its padding left out. */
-function base64Size(data: string): number {
-  return Math.floor(data.length * 3 / 4) - (data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0);
+  if (image?.type !== "image" || image.source?.type !== "base64") return null;
+  return inlineImageType(image.source.media_type, image.source.data);
 }
 
 /**

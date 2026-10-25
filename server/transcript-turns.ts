@@ -1,5 +1,5 @@
 import type { StreamSource } from "./conversation-shared.ts";
-import { claudePeerNotice, piMessage } from "./transcript-records.ts";
+import { claudePeerNotice, piMessage, piPromptImages } from "./transcript-records.ts";
 import type { TranscriptEntry } from "./claude-transcript.ts";
 import { claudeImages, isCommandEntry, withoutPictureBytes } from "./claude-transcript.ts";
 
@@ -110,7 +110,10 @@ function opensTurn(source: StreamSource, line: string): boolean {
   if (source === "codex-transcript") return entry.type === "event_msg" && entry.payload?.type === "task_started";
   if (source !== "claude-transcript") {
     const message = piMessage(entry);
-    return message?.role === "user" && (message.content as Record<string, unknown>[]).some((part) => part.type === "text" && typeof part.text === "string" && part.text.length > 0);
+    if (message?.role !== "user") return false;
+    if ((message.content as Record<string, unknown>[]).some((part) => part.type === "text" && typeof part.text === "string" && part.text.length > 0)) return true;
+    // a pi prompt that is only pictures is drawn as a turn of its own, so it opens one
+    return (source === "pi-transcript" || source === "cmd-transcript") && piPromptImages(entry, message).length > 0;
   }
   // another session's message opens a turn in either of its forms, the meta entry and the queued attachment
   if (claudePeerNotice(entry) !== null) return true;
