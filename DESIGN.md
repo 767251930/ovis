@@ -545,6 +545,14 @@ The values are the ones in `src/styles.css`. Every token but `--fs-input` is `ca
   name `"JetBrains Mono Web"`. The name is the app's own so that the terminal never takes it:
   xterm's stack (`src/lib/fontFamily.ts`) names `"JetBrains Mono"`, sizes every cell from the
   first font that matches, and keeps meaning the copy installed on the device.
+- Except in Ovis for Mac's window: WebKit there draws a font the user installed, but its canvas,
+  which xterm and the glyph fit measure with, sees only the system's fonts. The terminal leaves
+  such a font out of its stack (`measurableFontStack`) and draws what Safari draws, Menlo and
+  Apple SD Gothic Neo, rather than a grid measured in one font and drawn in another. It follows
+  Zed and Warp, whose terminals size a cell with the font that draws it. VS Code's xterm.js
+  terminal, the nearest web one, never meets the case: in Electron the canvas and the page see
+  the same installed fonts. A WKWebView's canvas cannot, so here the font is dropped rather than
+  measured.
 - Chat reading scale: prose, the user's bubble and live narration are `--fs-chat` on
   `--lh-prose`; `strong` is `--fw-semibold` in `--text-strong`; inline code and code file chips
   are `0.87em` of their line; a code block is `--fs-sm` on `--lh-code`; headings are h1 `--fs-xl`,
